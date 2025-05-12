@@ -25,6 +25,13 @@ public:
     bool deleteMessage(int msg_id);
 
     std::vector<std::pair<int,std::string>> listUsers();
+
+    // Возвращает список чатов [chat_id, chat_name] для данного user_id
+    std::vector<std::tuple<int,bool,std::string>> listUserChats(int user_id);
+
+    int getUserIdByName(const std::string& username);
+
+    std::string getUsername(int user_id);
 private:
     PGconn* conn;
 };

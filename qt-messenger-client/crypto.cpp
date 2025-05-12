@@ -46,3 +46,33 @@ std::string decrypt(const std::string& ciphertext, const std::string& key) {
 
     return std::string((char*)outbuf.data(), len1+len2);
 }
+
+// helper: hex-таблица
+static const char hexDigits[] = "0123456789ABCDEF";
+
+std::string toHex(const std::string& data) {
+    std::string out;
+    out.reserve(data.size()*2);
+    for (unsigned char c : data) {
+        out.push_back(hexDigits[c>>4]);
+        out.push_back(hexDigits[c&0x0F]);
+    }
+    return out;
+}
+
+std::string fromHex(const std::string& hex) {
+    std::string out;
+    out.reserve(hex.size()/2);
+    auto hexVal = [](char c)->unsigned char {
+        if (c>='0'&&c<='9') return c-'0';
+        if (c>='A'&&c<='F') return c-'A'+10;
+        if (c>='a'&&c<='f') return c-'a'+10;
+        return 0;
+    };
+    for (size_t i = 0; i+1 < hex.size(); i += 2) {
+        unsigned char hi = hexVal(hex[i]);
+        unsigned char lo = hexVal(hex[i+1]);
+        out.push_back((char)((hi<<4)|lo));
+    }
+    return out;
+}

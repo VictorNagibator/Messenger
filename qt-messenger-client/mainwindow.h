@@ -1,4 +1,5 @@
 #pragma once
+
 #include <QMainWindow>
 #include <QTcpSocket>
 #include <QStackedWidget>
@@ -6,7 +7,8 @@
 #include <QPushButton>
 #include <QListWidget>
 #include <QTextEdit>
-#include <QLabel>
+#include <QTimer>
+#include <QMap>
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -18,7 +20,6 @@ public:
 private slots:
     void onRegister();
     void onLogin();
-    void onRefreshChats();
     void onLogout();
     void onChatSelected();
     void onSend();
@@ -27,25 +28,33 @@ private slots:
 private:
     // UI
     QStackedWidget *stack;
-    // Login page
-    QWidget      *pageLogin;
-    QLineEdit    *usernameEdit;
-    QLineEdit    *passwordEdit;
-    QPushButton  *loginButton;
-    QPushButton  *registerButton;
-    // Chats page
-    QWidget      *pageChats;
-    QPushButton  *refreshButton;
-    QPushButton  *logoutButton;
-    QListWidget  *chatsList;
-    QTextEdit    *chatView;
-    QLineEdit    *messageEdit;
-    QPushButton  *sendButton;
+    QWidget        *pageLogin;
+    QLineEdit      *usernameEdit;
+    QLineEdit      *passwordEdit;
+    QPushButton    *loginButton;
+    QPushButton    *registerButton;
+
+    QWidget        *pageChats;
+    QPushButton    *logoutButton;
+    QPushButton    *newChatButton;
+    QPushButton    *newGroupButton;
+    QListWidget    *chatsList;
+    QTextEdit      *chatView;
+    QLineEdit      *messageEdit;
+    QPushButton    *sendButton;
 
     // Network
-    QTcpSocket   *socket;
-    int           myUserId = -1;
-    int           currentChatId = -1;
+    QTcpSocket     *socket;
+    int             myUserId       = -1;
+    int             currentChatId  = -1;
+    bool            expectingUserId = false;
+    QString         pendingPeerName;
+    QMap<int,QString> userMap;
+
+    QString     pendingGroupName;
+    QStringList pendingGroupNames;    // исходные юзернеймы
+    QVector<int> pendingGroupIds;     // resolved user IDs
+    bool        creatingGroup = false;
 
     void sendCmd(const QString &cmd);
     static const QString AES_KEY;

@@ -105,24 +105,31 @@ bool Database::storeMessage(int chat_id, int sender_id, const std::string& conte
 }
 
 std::string Database::getChatHistory(int chat_id) {
-    std::ostringstream q; q<<chat_id;
-    const char* vals[1] = { q.str().c_str() };
+     // Подготавливаем аргумент
+    std::string cid = std::to_string(chat_id);
+    const char* vals[1] = { cid.c_str() };  // <--- Обязательно объявляем vals здесь
+    // Выбираем форматированную дату до минут, чтобы не возвращать секунды/микросекунды
     PGresult* res = PQexecParams(conn,
-        "SELECT msg_id,sender_id,content,created_at,deleted "
-        "FROM messages WHERE chat_id=$1 ORDER BY created_at ASC",
-        1,nullptr,vals,nullptr,nullptr,0);
+        R"(
+            SELECT
+              to_char(m.created_at, 'YYYY-MM-DD HH24:MI') AS ts,
+              u.username,
+              m.content
+            FROM messages m
+            JOIN users u ON m.sender_id = u.user_id
+            WHERE m.chat_id = $1
+            ORDER BY m.created_at ASC
+        )",
+        1, nullptr, vals, nullptr, nullptr, 0);
+
     std::ostringstream out;
-    if (PQresultStatus(res)==PGRES_TUPLES_OK) {
+    if (PQresultStatus(res) == PGRES_TUPLES_OK) {
         int n = PQntuples(res);
-        for (int i=0;i<n;i++) {
-            std::string msgid = PQgetvalue(res,i,0);
-            std::string sid   = PQgetvalue(res,i,1);
-            std::string txt   = PQgetvalue(res,i,2);
-            std::string ts    = PQgetvalue(res,i,3);
-            std::string del   = PQgetvalue(res,i,4);
-            out<<"["<<msgid<<"] ["<<ts<<"] User#"<<sid<<": "<<txt;
-            if (del=="t") out<<" (deleted)";
-            out<<"\n";
+        for (int i = 0; i < n; ++i) {
+            std::string ts      = PQgetvalue(res, i, 0);
+            std::string user    = PQgetvalue(res, i, 1);
+            std::string content = PQgetvalue(res, i, 2);
+            out << "[" << ts << "] " << user << ": " << content << "\n";
         }
     }
     PQclear(res);
@@ -154,4 +161,67 @@ std::vector<std::pair<int,std::string>> Database::listUsers() {
     }
     PQclear(res);
     return out;
+}
+
+std::vector<std::tuple<int,bool,std::string>> Database::listUserChats(int user_id) {
+    const char* vals[1] = { std::to_string(user_id).c_str() };
+    PGresult* res = PQexecParams(conn,
+        R"(
+            SELECT
+              c.chat_id,
+              c.is_group,
+              CASE
+                WHEN c.is_group THEN c.chat_name
+                ELSE (
+                  SELECT u.username
+                  FROM users u
+                  JOIN chat_members cm ON u.user_id = cm.user_id
+                  WHERE cm.chat_id = c.chat_id
+                    AND u.user_id <> $1
+                  LIMIT 1
+                )
+              END AS name
+            FROM chats c
+            JOIN chat_members m1 ON c.chat_id = m1.chat_id
+            WHERE m1.user_id = $1
+        )",
+        1, nullptr, vals, nullptr, nullptr, 0);
+
+    std::vector<std::tuple<int,bool,std::string>> out;
+    if (PQresultStatus(res) == PGRES_TUPLES_OK) {
+        int n = PQntuples(res);
+        out.reserve(n);
+        for (int i = 0; i < n; ++i) {
+            int cid  = std::stoi(PQgetvalue(res,i,0));
+            bool isg = (PQgetvalue(res,i,1)[0]=='t');
+            std::string name = PQgetvalue(res,i,2);
+            out.emplace_back(cid, isg, name);
+        }
+    } else {
+        std::cerr << "listUserChats failed: " << PQerrorMessage(conn);
+    }
+    PQclear(res);
+    return out;
+}
+
+int Database::getUserIdByName(const std::string& username) {
+    const char* val[1] = { username.c_str() };
+    PGresult* res = PQexecParams(conn,
+      "SELECT user_id FROM users WHERE username=$1",
+      1,nullptr,val,nullptr,nullptr,0);
+    int id = -1;
+    if (PQntuples(res)==1) id = std::stoi(PQgetvalue(res,0,0));
+    PQclear(res);
+    return id;
+}
+
+std::string Database::getUsername(int user_id) {
+    const char* val[1] = { std::to_string(user_id).c_str() };
+    PGresult* r = PQexecParams(conn,
+        "SELECT username FROM users WHERE user_id=$1",
+        1, nullptr, val, nullptr, nullptr, 0);
+    std::string name;
+    if (PQntuples(r)==1) name = PQgetvalue(r,0,0);
+    PQclear(r);
+    return name;
 }

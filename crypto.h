@@ -7,4 +7,7 @@
 std::string encrypt(const std::string& plaintext, const std::string& key);
 std::string decrypt(const std::string& ciphertext, const std::string& key);
 
+std::string toHex(const std::string& data);
+std::string fromHex(const std::string& hex);
+
 #endif // CRYPTO_H
