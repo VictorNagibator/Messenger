@@ -6,6 +6,8 @@
 #include <QLabel>
 #include <QDateTime>
 #include <QDebug>
+#include <QMenu>
+#include <QRegularExpression>
 #include "crypto.h"
 
 const QString MainWindow::AES_KEY = QString::fromUtf8("01234567890123456789012345678901");
@@ -16,10 +18,8 @@ MainWindow::MainWindow(QWidget *parent)
     // Сетевой сокет
     socket = new QTcpSocket(this);
     socket->connectToHost("127.0.0.1", 12345);
-    connect(socket, &QTcpSocket::readyRead, this, &MainWindow::onSocketReadyRead);
-    connect(socket, &QTcpSocket::connected, this, [](){
-        qDebug() << "[socket] connected";
-    });
+    connect(socket, &QTcpSocket::readyRead,    this, &MainWindow::onSocketReadyRead);
+    connect(socket, &QTcpSocket::connected,     this, [](){ qDebug() << "[socket] connected"; });
     connect(socket, &QTcpSocket::errorOccurred, this, [](QAbstractSocket::SocketError e){
         qDebug() << "[socket] error" << e;
     });
@@ -58,6 +58,7 @@ MainWindow::MainWindow(QWidget *parent)
     {
         auto *v = new QVBoxLayout(pageChats);
 
+        // Верхняя панель: New Chat / New Group / Logout
         auto *top = new QHBoxLayout();
         newChatButton  = new QPushButton("New Chat",  pageChats);
         newGroupButton = new QPushButton("New Group", pageChats);
@@ -79,26 +80,20 @@ MainWindow::MainWindow(QWidget *parent)
         });
         connect(newGroupButton, &QPushButton::clicked, this, [this](){
             bool ok;
-            // 1) спрашиваем название
             pendingGroupName = QInputDialog::getText(
                 this, "New Group", "Group name:", QLineEdit::Normal, {}, &ok);
             if (!ok || pendingGroupName.isEmpty()) return;
-
-            // 2) спрашиваем список юзеров
             QString members = QInputDialog::getText(
                 this, "New Group", "Usernames (space-separated):",
                 QLineEdit::Normal, {}, &ok);
             if (!ok) return;
-
-            // 3) запомним, что собираем группу
             pendingGroupNames = members.split(' ', Qt::SkipEmptyParts);
             pendingGroupIds.clear();
             creatingGroup = true;
-
-            // 4) запросим ID первого пользователя
             expectingUserId = true;
             sendCmd("GET_USER_ID " + pendingGroupNames.first());
         });
+        connect(logoutButton, &QPushButton::clicked, this, &MainWindow::onLogout);
 
         auto *h = new QHBoxLayout();
         chatsList = new QListWidget(pageChats);
@@ -107,7 +102,11 @@ MainWindow::MainWindow(QWidget *parent)
         auto *r = new QVBoxLayout();
         chatView = new QTextEdit(pageChats);
         chatView->setReadOnly(true);
+        chatView->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(chatView, &QWidget::customContextMenuRequested,
+                this, &MainWindow::onChatViewContextMenu);
         r->addWidget(chatView, 1);
+
         auto *sh = new QHBoxLayout();
         messageEdit = new QLineEdit(pageChats);
         sendButton  = new QPushButton("Send", pageChats);
@@ -118,25 +117,48 @@ MainWindow::MainWindow(QWidget *parent)
         h->addLayout(r, 2);
         v->addLayout(h);
 
-        connect(logoutButton,  &QPushButton::clicked, this, &MainWindow::onLogout);
-        connect(chatsList,     &QListWidget::itemClicked, this, &MainWindow::onChatSelected);
-        connect(sendButton,    &QPushButton::clicked, this, &MainWindow::onSend);
+        connect(chatsList, &QListWidget::itemClicked, this, &MainWindow::onChatSelected);
+        connect(sendButton, &QPushButton::clicked,    this, &MainWindow::onSend);
     }
     stack->addWidget(pageChats);
 
-    // show login initially
+    // Показываем страницу логина
     stack->setCurrentWidget(pageLogin);
 }
 
 MainWindow::~MainWindow() {}
 
+// Отправка команды
 void MainWindow::sendCmd(const QString &cmd) {
     qDebug() << "[sendCmd]" << cmd;
     socket->write(cmd.toUtf8() + "\n");
 }
 
-// --- Slots ---
+// Контекстное меню в chatView
+void MainWindow::onChatViewContextMenu(const QPoint &pt) {
+    QTextCursor cursor = chatView->cursorForPosition(pt);
+    cursor.select(QTextCursor::LineUnderCursor);
+    QString line = cursor.selectedText();
+    QRegularExpression re(R"(\(id=(\d+)\))");
+    auto m = re.match(line);
+    if (!m.hasMatch()) return;
+    QString msgId = m.captured(1);
 
+    QMenu menu;
+    QAction *delMe  = menu.addAction("Delete for me");
+    QAction *delAll = menu.addAction("Delete for all");
+    QAction *act = menu.exec(chatView->viewport()->mapToGlobal(pt));
+    if (act == delMe) {
+        sendCmd("DELETE " + msgId);
+    } else if (act == delAll) {
+        sendCmd("DELETE_GLOBAL " + msgId);
+    }
+    // удаляем строку локально
+    cursor.removeSelectedText();
+    cursor.deleteChar();
+}
+
+// Слот: зарегистрироваться
 void MainWindow::onRegister() {
     QString u = usernameEdit->text(), p = passwordEdit->text();
     if (u.isEmpty() || p.isEmpty()) {
@@ -146,20 +168,20 @@ void MainWindow::onRegister() {
     sendCmd(QString("REGISTER %1 %2").arg(u,p));
 }
 
+// Слот: залогиниться
 void MainWindow::onLogin() {
     QString u = usernameEdit->text(), p = passwordEdit->text();
-    qDebug() << "[onLogin]" << u << p;
     if (u.isEmpty() || p.isEmpty()) {
         QMessageBox::warning(this,"Error","Enter username & password");
         return;
     }
     sendCmd(QString("LOGIN %1 %2").arg(u,p));
+    myUsername = u;
 }
 
+// Слот: разлогиниться
 void MainWindow::onLogout() {
-    myUserId = -1;
-    currentChatId = -1;
-    userMap.clear();
+    myUserId = -1; currentChatId = -1;
     chatsList->clear();
     chatView->clear();
     usernameEdit->clear();
@@ -167,6 +189,7 @@ void MainWindow::onLogout() {
     stack->setCurrentWidget(pageLogin);
 }
 
+// Слот: выбран чат из списка
 void MainWindow::onChatSelected() {
     auto *it = chatsList->currentItem();
     if (!it) return;
@@ -175,141 +198,159 @@ void MainWindow::onChatSelected() {
     sendCmd(QString("HISTORY %1").arg(currentChatId));
 }
 
+// Слот: отправить сообщение
 void MainWindow::onSend() {
     if (currentChatId < 0) return;
     QString msg = messageEdit->text().trimmed();
     if (msg.isEmpty()) return;
-
-    QByteArray bin = QByteArray::fromStdString(encrypt(msg.toStdString(),AES_KEY.toStdString()));
+    QByteArray bin = QByteArray::fromStdString(
+        encrypt(msg.toStdString(), AES_KEY.toStdString()));
     QString hex = bin.toHex();
     sendCmd(QString("SEND %1 ").arg(currentChatId) + hex);
 
-    // сразу показываем своё сообщение
-    QString now  = QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm");
-    QString nick = userMap.value(myUserId, usernameEdit->text());
-    chatView->append(QString("[%1] %2: %3").arg(now, nick, msg));
+    //show message
+    QString now = QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm");
+    chatView->append(QString("[%1] %2: %3").arg(now, myUsername, msg));
     messageEdit->clear();
 }
 
+// Слот: пришли данные от сервера
 void MainWindow::onSocketReadyRead() {
-    // 1) Считаем всё, что пришло
     QByteArray data = socket->readAll();
-    QStringList lines = QString::fromUtf8(data).split('\n', Qt::SkipEmptyParts);
-
-    // 2) Обрабатываем каждую строку
+    QStringList lines = QString::fromUtf8(data)
+                          .split('\n', Qt::SkipEmptyParts);
     for (const QString &line : lines) {
         qDebug() << "RECV:" << line;
 
-        if (creatingGroup && expectingUserId) {
-            expectingUserId = false;
-            bool okId;
-            int uid = line.toInt(&okId);
-            if (!okId || uid <= 0) {
-                QMessageBox::warning(this, "Error",
-                    "User \"" + pendingGroupNames[pendingGroupIds.size()] + "\" not found");
-                creatingGroup = false;
-                continue;
-            }
-            // сохраняем и, если остались, запрашиваем следующего
-            pendingGroupIds.append(uid);
-            if (pendingGroupIds.size() < pendingGroupNames.size()) {
-                expectingUserId = true;
-                sendCmd("GET_USER_ID " + pendingGroupNames.at(pendingGroupIds.size()));
-            } else {
-                // все ID собраны — отправляем единоразово CREATE_CHAT 1
-                QString cmd = "CREATE_CHAT 1 " + pendingGroupName;
-                for (int id : pendingGroupIds)
-                    cmd += " " + QString::number(id);
-                sendCmd(cmd);
-                creatingGroup = false;
-            }
-            continue;
-        }
-
-        // 1) Ответ на GET_USER_ID
+        // 1) Ответ на GET_USER_ID (для создания чата)
         if (expectingUserId) {
             expectingUserId = false;
-            bool ok; int peerId = line.toInt(&ok);
-            if (ok && peerId > 0) {
-                sendCmd(QString("CREATE_CHAT 0 %1 %2").arg(myUserId).arg(peerId));
-            } else {
+            bool ok; int uid = line.toInt(&ok);
+            if (!ok || uid<=0) {
                 QMessageBox::warning(this,"Error",
                     "User \"" + pendingPeerName + "\" not found");
+            } else {
+                // если мы в процессе создания группы
+                if (creatingGroup) {
+                    pendingGroupIds.append(uid);
+                    if (pendingGroupIds.size() < pendingGroupNames.size()) {
+                        expectingUserId = true;
+                        sendCmd("GET_USER_ID " + pendingGroupNames[pendingGroupIds.size()]);
+                    } else {
+                        // все ID собраны, отправляем CREATE_CHAT
+                        QString cmd = "CREATE_CHAT 1 " + pendingGroupName;
+                        for (int x : pendingGroupIds)
+                            cmd += " " + QString::number(x);
+                        sendCmd(cmd);
+                        creatingGroup = false;
+                    }
+                } else {
+                    // обычный приватный чат
+                    sendCmd(QString("CREATE_CHAT 0 %1")
+                                .arg(uid));
+                }
             }
             continue;
         }
 
-        if (line.startsWith("NEW_CHAT ")) {
-            // Уберём префикс и финальный ';'
-            QString rest = line.mid(9).trimmed();          // после "NEW_CHAT "
-            if (rest.endsWith(';')) rest.chop(1);
-
-            // rest == "<chat_id>:<is_group>:<chatName>"
-            QStringList p = rest.split(':');
-            int cid     = p[0].toInt();
-            bool isg    = (p[1] == "1");
-            QString name= p[2];
-
-            // Добавляем в список
-            QString disp = isg
-                ? QString("Group: %1").arg(name)
-                : QString("Private: %1").arg(name);
-            auto *item = new QListWidgetItem(disp, chatsList);
-            item->setData(Qt::UserRole, cid);
-            chatsList->addItem(item);
-
-            // сразу подписываемся и открываем историю
-            onChatSelected();
+        // 2) Повторный приватный чат
+        if (line == "ERROR CHAT_EXISTS") {
+            QMessageBox::information(this,"Info",
+                                     "Private chat already exists.");
             continue;
         }
 
-        // 2) REGISTER/LOGIN OK
-        if (line.startsWith("OK ")) {
+        // 3) Успешный логин
+        if (line.startsWith("OK LOGIN")) {
             myUserId = line.split(' ')[1].toInt();
             stack->setCurrentWidget(pageChats);
+
             sendCmd("LIST_CHATS");
             continue;
         }
 
-        // 3) Ошибки
+        if (line.startsWith("OK REG")) {
+            QMessageBox::information(this, "Success!", "Successful sign in! Now try logging in...");
+            continue;
+        }
+
+        // 4) Новый чат
+        if (line.startsWith("NEW_CHAT")) {
+            sendCmd("LIST_CHATS");
+            continue;
+        }
+
+        if (line.startsWith("NEW_HISTORY")) {
+            auto *it = chatsList->currentItem();
+            if (!it) continue;
+            currentChatId = it->data(Qt::UserRole).toInt();
+            if (currentChatId == line.mid(12).toInt()) {
+                sendCmd("HISTORY " + QString::number(currentChatId));
+            }
+            continue;
+        }
+
+        // 5) Список чатов
+        if (line.startsWith("CHATS")) {
+            chatsList->clear();
+            auto chunks = line.mid(6)
+                          .split(';', Qt::SkipEmptyParts);
+            for (auto &chunk : chunks) {
+                auto p = chunk.split(':');
+                int cid     = p[0].toInt();
+                bool isg    = (p[1]=="1");
+                QString name = p[2];
+                auto members = p[3].split(',');
+                
+                QString with_whom;
+                for (auto &member : members) {
+                    if (member != myUsername) {
+                        with_whom = member;
+                        break;
+                    }
+                } 
+
+                QString disp = isg
+                    ? QString("👥: %1").arg(name)
+                    : QString("👤: %1").arg(with_whom);
+                auto *it = new QListWidgetItem(disp);
+                it->setData(Qt::UserRole, cid);
+                it->setData(Qt::UserRole+1, name);
+                it->setData(Qt::UserRole+2, members);
+                chatsList->addItem(it);
+            }
+            if (!chunks.isEmpty()) onChatSelected();
+            continue;
+        }
+
+        // 7) История
+        if (line.startsWith("HISTORY")) {
+            chatView->clear();
+
+            auto strings = line.mid(8).split(";");
+
+            for (auto &string : strings) {
+                chatView->append(string);
+            }
+            continue;
+        }
+
+        // 8) Глобальное удаление
+        if (line.startsWith("MSG_DELETED ")) {
+            int mid = line.mid(12).toInt();
+            // удаляем все строки с "(id=mid)"
+            QStringList all = chatView->toPlainText().split('\n');
+            chatView->clear();
+            for (auto &l : all)
+                if (!l.contains("(id=" + QString::number(mid) + ")"))
+                    chatView->append(l);
+            continue;
+        }
+
+        // 9) Ошибки
         if (line.startsWith("ERROR")) {
             QMessageBox::warning(this,"Error", line);
             continue;
         }
-
-        // 4) Список чатов
-        if (line.startsWith("CHATS ")) {
-            chatsList->clear();
-                for (const QString &it : line.mid(6).split(';', Qt::SkipEmptyParts)) {
-                    auto p = it.split(':');
-                    int cid        = p[0].toInt();
-                    bool isg       = (p[1] == "1");
-                    QString name   = p[2];
-                    QString disp   = isg
-                        ? QString("Group: %1").arg(name)
-                        : QString("Private: %1").arg(name);
-                    auto *item = new QListWidgetItem(disp);
-                    item->setData(Qt::UserRole, cid);
-                    item->setData(Qt::UserRole + 1, name);
-                    chatsList->addItem(item);
-                }
-            if (chatsList->count() > 0) onChatSelected();
-            continue;
-        }
-
-        // 5) Ответ на CREATE_CHAT (число)
-        bool okNum; int v = line.toInt(&okNum);
-        if (okNum && v > 0) {
-            sendCmd("LIST_CHATS");
-            continue;
-        }
-
-        // 6) Любая строка истории
-        if (line.startsWith("[")) {
-            chatView->append(line);
-            continue;
-        }
-
-        // всё остальное игнорим
     }
 }

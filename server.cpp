@@ -1,4 +1,3 @@
-// server.cpp
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -11,10 +10,10 @@
 #include <mutex>
 #include <unordered_map>
 #include <vector>
-#include <algorithm>    // std::remove
-#include <tuple>        // std::tie
+#include <algorithm>
+#include <tuple>
 #include <sstream>
-#include <ctime>        // std::time, std::strftime
+#include <ctime>
 
 #include "db.h"
 #include "crypto.h"
@@ -23,286 +22,298 @@
 #define BACKLOG  10
 
 static Database* db;
-static const std::string aesKey = "01234567890123456789012345678901";
+static const std::string AES_KEY = "01234567890123456789012345678901";
 static std::atomic<bool> running{true};
 static int serverSock = -1;
 
-// client socket → partial buffer
+// --- Socket buffers
 static std::mutex bufMtx;
-static std::unordered_map<int, std::string> sockBuffers;
+static std::unordered_map<int,std::string> sockBuf;
 
-// chat_id → subscribers
+// --- Subscribers for pushes: chat_id -> sockets
 static std::mutex subMtx;
-static std::unordered_map<int, std::vector<int>> subscribers;
+static std::unordered_map<int,std::vector<int>> subscribers;
 
-// socket → userId
+// --- User ↔ sockets
 static std::mutex userMtx;
-static std::unordered_map<int,int> socketToUser;      // sock -> userId
-static std::unordered_map<int,std::vector<int>> userToSockets; // userId -> [sock]
+static std::unordered_map<int,int> socketToUser;
+static std::unordered_map<int,std::vector<int>> userToSockets;
 
-// Получить текущее время в формате YYYY-MM-DD HH24:MI
-static std::string currentTimestamp() {
-    std::time_t t = std::time(nullptr);
-    char buf[32];
-    std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", std::localtime(&t));
-    return buf;
+// reliable send
+static void sendStr(int s, const std::string &m) {
+    size_t sent = 0;
+    while (sent < m.size()) {
+        ssize_t w = send(s, m.data()+sent, m.size()-sent, 0);
+        if (w<=0) break;
+        sent += w;
+    }
+    std::cerr << "[SERVER] sent: " << m;
 }
 
-void sendStr(int sock, const std::string &s) {
-    size_t total = 0;
-    while (total < s.size()) {
-        ssize_t sent = send(sock, s.data()+total, s.size()-total, 0);
-        if (sent <= 0) break;
-        total += sent;
+// remove client from buffers & subscribers
+static void dropClient(int s) {
+    {
+        std::lock_guard lk(bufMtx);
+        sockBuf.erase(s);
+    }
+    {
+        std::lock_guard lk(subMtx);
+        for (auto &kv : subscribers)
+            kv.second.erase(std::remove(kv.second.begin(), kv.second.end(), s),
+                            kv.second.end());
     }
 }
 
-void removeClient(int sock) {
-    std::lock_guard<std::mutex> lk(bufMtx);
-    sockBuffers.erase(sock);
-    // и отписываем от подписок
-    std::lock_guard<std::mutex> lk2(subMtx);
-    for (auto &kv : subscribers) {
-        auto &vec = kv.second;
-        vec.erase(std::remove(vec.begin(), vec.end(), sock), vec.end());
-    }
-}
-
-void adminConsole() {
+// admin consoles
+static void adminThread() {
     std::string line;
-    while (running.load()) {
-        if (!std::getline(std::cin, line)) break;
-        if (line == "SHUTDOWN") {
-            std::cout << "[ADMIN] SHUTDOWN received, stopping server...\n";
-            running.store(false);
-            if (serverSock != -1) {
-                shutdown(serverSock, SHUT_RDWR);
-                close(serverSock);
-            }
+    while (running && std::getline(std::cin,line)) {
+        if (line=="RESET") {
+            db->deleteEverything();
+            line = "SHUTDOWN";
+        }
+
+        if (line=="SHUTDOWN") {
+            running = false;
+            shutdown(serverSock,SHUT_RDWR);
+            close(serverSock);
             break;
         }
     }
 }
 
-void clientThread(int sock) {
-    char tmp[1024];
+static void clientHandler(int s) {
+    char buf[2048];
     int userId = -1;
 
     while (true) {
-        ssize_t n = recv(sock, tmp, sizeof(tmp), 0);
-        if (n <= 0) break;
-
+        ssize_t r = recv(s, buf, sizeof(buf), 0);
+        if (r<=0) break;
         {
-            std::lock_guard<std::mutex> lk(bufMtx);
-            sockBuffers[sock].append(tmp, n);
+            std::lock_guard lk(bufMtx);
+            sockBuf[s].append(buf, r);
         }
-
+        // process lines
         while (true) {
             std::string line;
             {
-                std::lock_guard<std::mutex> lk(bufMtx);
-                auto &buf = sockBuffers[sock];
-                auto pos = buf.find('\n');
-                if (pos == std::string::npos) break;
-                line = buf.substr(0, pos);
-                buf.erase(0, pos+1);
+                std::lock_guard lk(bufMtx);
+                auto &b = sockBuf[s];
+                auto p = b.find('\n');
+                if (p==std::string::npos) break;
+                line = b.substr(0,p);
+                b.erase(0,p+1);
             }
-            if (!line.empty() && line.back()=='\r') line.pop_back();
-
-            std::cerr << "[SERVER] Got: \"" << line << "\"\n";
+            if (line.size() && line.back()=='\r') line.pop_back();
             std::istringstream iss(line);
-            std::string cmd;
-            iss >> cmd;
+            std::string cmd; iss>>cmd;
 
-            if (cmd == "REGISTER") {
+            if (cmd=="REGISTER") {
                 std::string u,p; iss>>u>>p;
                 bool ok = db->registerUser(u,p);
-                if (ok) {
-                    int id = db->authenticateUser(u,p);
-                    sendStr(sock, "OK " + std::to_string(id) + "\n");
-                } else {
-                    sendStr(sock, "ERROR USER_EXISTS\n");
-                }
+                sendStr(s, ok ? "OK REG\n" : "ERROR USER_EXISTS\n");
             }
-            else if (cmd == "LOGIN") {
+            else if (cmd=="LOGIN") {
                 std::string u,p; iss>>u>>p;
                 int id = db->authenticateUser(u,p);
                 if (id>0) {
                     userId = id;
                     {
-                        std::lock_guard lk(userMtx);
-                        socketToUser[sock] = userId;
-                        userToSockets[userId].push_back(sock);
+                        std::lock_guard ul(userMtx);
+                        socketToUser[s] = id;
+                        userToSockets[id].push_back(s);
                     }
-                    sendStr(sock, "OK " + std::to_string(id) + "\n");
+                    sendStr(s, "OK LOGIN\n");
                 } else {
-                    sendStr(sock, "ERROR\n");
-                }   
-            }
-            else if (cmd == "LIST_CHATS") {
-                if (userId<0) {
-                    sendStr(sock, "ERROR Not logged\n");
-                } else {
-                    auto chats = db->listUserChats(userId);
-                    std::ostringstream out;
-                    out << "CHATS ";
-                    for (auto &t : chats) {
-                        int cid; bool isg; std::string name;
-                        std::tie(cid,isg,name) = t;
-                        out << cid << ":" << (isg?"1":"0") << ":" << name << ";";
-                    }
-                    out << "\n";
-
-                    // подпишем на пуши
-                    {
-                        std::lock_guard<std::mutex> lk(subMtx);
-                        // очистка
-                        for (auto &kv : subscribers) {
-                            auto &v = kv.second;
-                            v.erase(std::remove(v.begin(), v.end(), sock), v.end());
-                        }
-                        // новая подписка
-                        for (auto &t : chats) {
-                            int cid; bool isg; std::string name;
-                            std::tie(cid,isg,name) = t;
-                            subscribers[cid].push_back(sock);
-                        }
-                    }
-                    sendStr(sock, out.str());
+                    sendStr(s, "ERROR\n");
                 }
             }
-            else if (cmd == "SEND") {
-                if (userId<0) { sendStr(sock,"ERROR Not logged\n"); continue; }
-                int chat_id; iss>>chat_id;
+            else if (cmd=="LIST_CHATS") {
+                if (userId<0) {
+                    sendStr(s,"ERROR Not logged\n");
+                    continue;
+                }
+                auto chats = db->listUserChats(userId);
+                std::ostringstream out;
+                out<<"CHATS ";
+                for (auto &t:chats) {
+                    int cid; bool isg; std::string name;
+                    std::tie(cid,isg,name) = t;
+                    out<<cid<<":"<<(isg?"1":"0")<<":"<<name<<":";
+                    auto members = db->chatMembers(cid);
+                    for (auto &member : members)
+                        out << member << ",";
+                    out << ";";
+                }
+                // resubscribe
+                {
+                    std::lock_guard ukl(subMtx);
+                    for (auto &kv:subscribers)
+                        kv.second.erase(std::remove(kv.second.begin(),kv.second.end(),s),
+                                        kv.second.end());
+                    for (auto &t:chats) {
+                        int cid; bool isg; std::string name;
+                        std::tie(cid,isg,name)=t;
+                        subscribers[cid].push_back(s);
+                    }
+                }
+
+                std::string res = out.str();
+                res.pop_back();
+                res += "\n";
+
+                sendStr(s, res);
+            }
+            else if (cmd=="CREATE_CHAT") {
+                if (userId<0) { sendStr(s,"ERROR Not logged\n"); continue; }
+                int isGroup; iss>>isGroup;
+                if (!isGroup) {
+                    int peer; iss>>peer;
+                    // 1) проверка дубликата
+                    int existing = db->findPrivateChat(userId, peer);
+                    if (existing > 0) {
+                        sendStr(s, "ERROR CHAT_EXISTS\n");
+                        continue;
+                    }
+                    // 2) создаём
+                    int chatId = db->createChat(false, "");
+                    db->addUserToChat(chatId, userId);
+                    db->addUserToChat(chatId, peer);
+                    sendStr(s, std::to_string(chatId) + "\n");
+                    // 3) пуш
+                    std::string push = "NEW_CHAT\n";
+                    std::lock_guard ul(userMtx);
+                    for (int u: {userId, peer})
+                        for (auto s2: userToSockets[u])
+                            sendStr(s2, push);
+                } else {
+                    // group: first token is group name, then ids
+                    std::string rest; iss>>std::ws; std::getline(iss,rest);
+                    std::istringstream is2(rest);
+                    std::string gname; is2>>gname;
+                    std::vector<int> members={userId};
+                    int x;
+                    while(is2>>x) members.push_back(x);
+                    int cid = db->createChat(true,gname);
+                    for(int u:members) db->addUserToChat(cid,u);
+                    sendStr(s, std::to_string(cid)+"\n");
+                    std::string push="NEW_CHAT\n";
+                    std::lock_guard ul(userMtx);
+                    for(int u:members)
+                        for(int sock2:userToSockets[u])
+                            sendStr(sock2,push);
+                }
+            }
+            else if (cmd=="SEND") {
+                if (userId<0) { sendStr(s,"ERROR Not logged\n"); continue; }
+                int cid; iss>>cid;
                 std::string hex; std::getline(iss,hex);
                 if (!hex.empty()&&hex.front()==' ') hex.erase(0,1);
-                std::string msg = decrypt(fromHex(hex), aesKey);
-
-                if (!db->isUserInChat(chat_id,userId)) {
-                    sendStr(sock,"ERROR No chat access\n");
+                std::string msg = decrypt(fromHex(hex),AES_KEY);
+                if (!db->isUserInChat(cid,userId)) {
+                    sendStr(s,"ERROR No chat access\n");
                     continue;
                 }
-                bool ok = db->storeMessage(chat_id, userId, msg);
-                sendStr(sock, ok?"OK\n":"ERROR\n");
-
+                bool ok = db->storeMessage(cid,userId,msg);
+                sendStr(s, ok?"OK SENT\n":"ERROR\n");
                 if (ok) {
-                    std::string ts = currentTimestamp();
-                    std::ostringstream push;
-                    push << "[" << ts << "] "
-                         << db->getUsername(userId)
-                         << ": " << msg << "\n";
-                    auto s = push.str();
-
-                    std::lock_guard<std::mutex> lk(subMtx);
-                    for (int peer : subscribers[chat_id]) {
-                        if (peer!=sock) sendStr(peer, s);
-                    }
+                    std::lock_guard sl(subMtx);
+                    for (int sock2:subscribers[cid])
+                            if (sock2 != s)
+                                sendStr(sock2,"NEW_HISTORY " + std::to_string(cid) + "\n");
                 }
             }
-            else if (cmd == "HISTORY") {
-                if (userId<0) { sendStr(sock,"ERROR Not logged\n"); continue; }
-                int chat_id; iss>>chat_id;
-                if (!db->isUserInChat(chat_id,userId)) {
-                    sendStr(sock,"ERROR No chat access\n");
-                    continue;
+            else if (cmd=="HISTORY") {
+                if (userId<0) { sendStr(s,"ERROR Not logged\n"); continue; }
+                int cid; iss>>cid;
+                if (!db->isUserInChat(cid,userId)) {
+                    sendStr(s,"ERROR No chat access\n"); continue;
                 }
-                sendStr(sock, db->getChatHistory(chat_id));
+
+                std::ostringstream out;
+
+                out << "HISTORY "; 
+
+                auto messages = db->getChatHistory(cid,userId);
+                for (auto &message : messages) {
+                    std::string date; std::string name;; std::string content;
+                    std::tie(date,name,content) = message;
+                    out << "[" << date << "]" << " " << name << ": " << content << ";";
+                }
+
+                std::string res = out.str();
+                res.pop_back(); //last ;
+
+                sendStr(s, res);
             }
-            else if (cmd == "CREATE_CHAT") {
-                if (userId<0) { sendStr(sock,"ERROR Not logged\n"); continue; }
-                int isG; iss >> isG;
-
-                // 1) читаем ОДНО слово как название группы
-                std::string chatName;
-                if (isG) {
-                    iss >> chatName;  // вместо getline, чтобы НЕ схватить ID
-                }
-
-                // 2) создаём чат
-                int chat_id = db->createChat(isG, chatName);
-
-                // 3) всегда добавляем создателя
-                db->addUserToChat(chat_id, userId);
-                std::vector<int> members = { userId };
-
-                // 4) добавляем остальных участников из оставшихся токенов
-                int uid;
-                while (iss >> uid) {
-                    db->addUserToChat(chat_id, uid);
-                    members.push_back(uid);
-                }
-
-                // 5) возвращаем клиенту только ID нового чата
-                sendStr(sock, std::to_string(chat_id) + "\n");
-
-                // 6) PUSH новым участникам: всем соединениям этих userId
-                std::string chunk = std::to_string(chat_id) + ":" +
-                                    (isG?"1":"0") + ":" + chatName + ";";
-                std::string push  = "NEW_CHAT " + chunk + "\n";
-
-                std::lock_guard<std::mutex> lk(userMtx);
-                for (int peerId : members) {
-                    for (int peerSock : userToSockets[peerId]) {
-                        sendStr(peerSock, push);
-                    }
-                }
-            }
+            // DELETE — удаление у себя
             else if (cmd == "DELETE") {
-                int mid; iss>>mid;
-                sendStr(sock, db->deleteMessage(mid) ? "OK\n":"ERROR\n");
+                int msg_id; 
+                iss >> msg_id;
+                int sender = db->getMessageSender(msg_id);
+                if (sender == userId) {
+                    bool ok = db->deleteMessageForUser(msg_id, userId);
+                    sendStr(s, ok ? "OK\n" : "ERROR\n");
+                } else {
+                    sendStr(s, "ERROR No rights\n");
+                }
             }
-            else if (cmd == "GET_USER_ID") {
-                std::string name; iss>>name;
-                int uid = db->getUserIdByName(name);
-                sendStr(sock, uid>0 ? std::to_string(uid)+"\n" : "ERROR NO_SUCH_USER\n");
+            // DELETE_GLOBAL — удаление для всех
+            else if (cmd == "DELETE_GLOBAL") {
+                int msg_id; 
+                iss >> msg_id;
+                int sender = db->getMessageSender(msg_id);
+                if (sender == userId) {
+                    bool ok = db->deleteMessageGlobal(msg_id);
+                    sendStr(s, ok ? "OK\n" : "ERROR\n");
+                } else {
+                    sendStr(s, "ERROR No rights\n");
+                }
+            }
+            else if (cmd=="GET_USER_ID") {
+                std::string nm; iss>>nm;
+                int uid = db->getUserIdByName(nm);
+                sendStr(s, uid>0 ? std::to_string(uid)+"\n" : "ERROR NO_SUCH_USER\n");
             }
             else {
-                sendStr(sock,"ERROR Unknown cmd\n");
+                sendStr(s,"ERROR Unknown\n");
             }
         }
     }
 
-    std::cerr<<"[SERVER] Disconnect sock "<<sock<<"\n";
-    removeClient(sock);
-    close(sock);
+    dropClient(s);
+    close(s);
     {
-        std::lock_guard lk(userMtx);
-        auto it = socketToUser.find(sock);
-        if (it != socketToUser.end()) {
-            int uid = it->second;
+        std::lock_guard ul(userMtx);
+        auto it = socketToUser.find(s);
+        if (it!=socketToUser.end()) {
+            int u = it->second;
             socketToUser.erase(it);
-            auto &v = userToSockets[uid];
-            v.erase(std::remove(v.begin(), v.end(), sock), v.end());
+            auto &v = userToSockets[u];
+            v.erase(std::remove(v.begin(),v.end(),s),v.end());
+        }
     }
-}
 }
 
 int main(){
-    std::thread(adminConsole).detach();
-
+    std::thread(adminThread).detach();
     db = new Database("host=localhost dbname=chatdb user=chatuser password=123");
 
-    serverSock = socket(AF_INET, SOCK_STREAM, 0);
-    if (serverSock<0) { perror("socket"); return 1; }
-
+    serverSock = socket(AF_INET,SOCK_STREAM,0);
+    if (serverSock<0){ perror("socket"); return 1; }
     sockaddr_in addr{};
-    addr.sin_family      = AF_INET;
-    addr.sin_port        = htons(PORT);
-    addr.sin_addr.s_addr = INADDR_ANY;
-
-    if (bind(serverSock,(sockaddr*)&addr,sizeof(addr))<0){ perror("bind");return 2; }
-    if (listen(serverSock,BACKLOG)<0){ perror("listen");return 3; }
-
-    std::cout<<"Server listening on port "<<PORT<<"\n";
-    while (running.load()) {
-        int client = accept(serverSock,nullptr,nullptr);
-        if (!running.load()) break;
-        if (client<0) { if (running.load()) perror("accept"); break; }
-        std::cerr<<"[SERVER] New sock "<<client<<"\n";
-        std::thread(clientThread, client).detach();
+    addr.sin_family=AF_INET;
+    addr.sin_port=htons(PORT);
+    addr.sin_addr.s_addr=INADDR_ANY;
+    if (bind(serverSock,(sockaddr*)&addr,sizeof(addr))<0){ perror("bind"); return 2; }
+    if (listen(serverSock,BACKLOG)<0){ perror("listen"); return 3; }
+    std::cout<<"Listening on "<<PORT<<"\n";
+    while (running) {
+        int cl = accept(serverSock,nullptr,nullptr);
+        if (!running) break;
+        if (cl<0) { if (running) perror("accept"); break; }
+        std::thread(clientHandler,cl).detach();
     }
-
-    std::cout<<"Server shutting down\n";
     delete db;
     return 0;
 }

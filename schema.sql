@@ -35,6 +35,13 @@ CREATE TABLE messages (
   deleted BOOLEAN NOT NULL DEFAULT FALSE
 );
 
+-- Таблица для пометки «удалил для себя»
+CREATE TABLE user_deleted_messages (
+  user_id INT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+  msg_id  INT NOT NULL REFERENCES messages(msg_id) ON DELETE CASCADE,
+  PRIMARY KEY(user_id, msg_id)
+);
+
 -- Индексы
 CREATE INDEX idx_messages_chat     ON messages(chat_id);
 CREATE INDEX idx_messages_sender   ON messages(sender_id);
