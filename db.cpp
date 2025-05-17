@@ -2,6 +2,7 @@
 #include <iostream>
 #include <sstream>
 
+
 Database::Database(const std::string& conninfo) {
     conn = PQconnectdb(conninfo.c_str());
     if (PQstatus(conn)!=CONNECTION_OK) {
@@ -15,6 +16,8 @@ Database::~Database() {
 }
 
 bool Database::registerUser(const std::string& username, const std::string& password_hash) {
+    std::lock_guard<std::mutex> lk(dbMtx);
+
     const char* v1[1] = { username.c_str() };
     PGresult* r = PQexecParams(conn,
         "SELECT 1 FROM users WHERE username=$1", 1, nullptr, v1,nullptr,nullptr,0);
@@ -30,6 +33,8 @@ bool Database::registerUser(const std::string& username, const std::string& pass
 }
 
 int Database::authenticateUser(const std::string& username, const std::string& password_hash) {
+    std::lock_guard<std::mutex> lk(dbMtx);
+
     const char* v[2] = { username.c_str(), password_hash.c_str() };
     PGresult* r = PQexecParams(conn,
         "SELECT user_id FROM users WHERE username=$1 AND password_hash=$2",
@@ -41,6 +46,8 @@ int Database::authenticateUser(const std::string& username, const std::string& p
 }
 
 int Database::findPrivateChat(int u1,int u2) {
+    std::lock_guard<std::mutex> lk(dbMtx);
+
     std::string s1=std::to_string(u1), s2=std::to_string(u2);
     const char* v[2]={s1.c_str(),s2.c_str()};
     PGresult* r = PQexecParams(conn,
@@ -58,6 +65,8 @@ int Database::findPrivateChat(int u1,int u2) {
 }
 
 int Database::createChat(bool is_group, const std::string& chat_name) {
+    std::lock_guard<std::mutex> lk(dbMtx);
+
     if (is_group) {
       const char* v[2] = { "t", chat_name.c_str() };
       PGresult* r = PQexecParams(conn,
@@ -81,6 +90,8 @@ int Database::createChat(bool is_group, const std::string& chat_name) {
 }
 
 bool Database::addUserToChat(int chat_id,int user_id) {
+    std::lock_guard<std::mutex> lk(dbMtx);
+
     std::ostringstream a,b; a<<chat_id; b<<user_id;
     const char* v[2]={a.str().c_str(),b.str().c_str()};
     PGresult* r = PQexecParams(conn,
@@ -92,6 +103,8 @@ bool Database::addUserToChat(int chat_id,int user_id) {
 }
 
 bool Database::isUserInChat(int chat_id,int user_id) {
+    std::lock_guard<std::mutex> lk(dbMtx);
+
     std::ostringstream a,b; a<<chat_id; b<<user_id;
     const char* v[2]={a.str().c_str(),b.str().c_str()};
     PGresult* r = PQexecParams(conn,
@@ -103,6 +116,8 @@ bool Database::isUserInChat(int chat_id,int user_id) {
 }
 
 bool Database::storeMessage(int chat_id,int sender_id,const std::string& content) {
+    std::lock_guard<std::mutex> lk(dbMtx);
+
     std::ostringstream a,b; a<<chat_id; b<<sender_id;
     const char* v[3]={a.str().c_str(),b.str().c_str(),content.c_str()};
     PGresult* r=PQexecParams(conn,
@@ -114,6 +129,8 @@ bool Database::storeMessage(int chat_id,int sender_id,const std::string& content
 }
 
 std::vector<std::tuple<std::string,std::string,std::string>>  Database::getChatHistory(int chat_id,int user_id) {
+    std::lock_guard<std::mutex> lk(dbMtx);
+
     std::string c=std::to_string(chat_id), u=std::to_string(user_id);
     const char* v[2]={c.c_str(),u.c_str()};
     PGresult* r = PQexecParams(conn,
@@ -147,6 +164,8 @@ std::vector<std::tuple<std::string,std::string,std::string>>  Database::getChatH
 }
 
 int Database::getMessageSender(int msg_id) {
+    std::lock_guard<std::mutex> lk(dbMtx);
+
     std::string s=std::to_string(msg_id);
     const char* v[1]={s.c_str()};
     PGresult* r=PQexecParams(conn,
@@ -159,6 +178,8 @@ int Database::getMessageSender(int msg_id) {
 }
 
 bool Database::deleteMessageForUser(int msg_id,int user_id) {
+    std::lock_guard<std::mutex> lk(dbMtx);
+
     std::ostringstream a,b; a<<msg_id; b<<user_id;
     const char* v[2]={a.str().c_str(),b.str().c_str()};
     PGresult* r=PQexecParams(conn,
@@ -170,6 +191,8 @@ bool Database::deleteMessageForUser(int msg_id,int user_id) {
 }
 
 bool Database::deleteMessageGlobal(int msg_id) {
+    std::lock_guard<std::mutex> lk(dbMtx);
+
     // Преобразуем msg_id в строку, чтобы получить стабильный указатель на c_str()
     std::string id_str = std::to_string(msg_id);
     const char* vals[1] = { id_str.c_str() };
@@ -191,6 +214,8 @@ bool Database::deleteMessageGlobal(int msg_id) {
 }
 
 int Database::getUserIdByName(const std::string& username) {
+    std::lock_guard<std::mutex> lk(dbMtx);
+
     const char* v[1]={username.c_str()};
     PGresult* r=PQexecParams(conn,
       "SELECT user_id FROM users WHERE username=$1",
@@ -202,6 +227,8 @@ int Database::getUserIdByName(const std::string& username) {
 }
 
 std::vector<std::tuple<int,bool,std::string>> Database::listUserChats(int user_id) {
+    std::lock_guard<std::mutex> lk(dbMtx);
+
     const char* vals[1] = { std::to_string(user_id).c_str() };
     PGresult* res = PQexecParams(conn,
         R"(
@@ -233,6 +260,8 @@ std::vector<std::tuple<int,bool,std::string>> Database::listUserChats(int user_i
 }
 
 std::string Database::getUsername(int user_id) {
+    std::lock_guard<std::mutex> lk(dbMtx);
+
     std::string u=std::to_string(user_id);
     const char* v[1]={u.c_str()};
     PGresult* r=PQexecParams(conn,
@@ -245,6 +274,8 @@ std::string Database::getUsername(int user_id) {
 }
 
 bool Database::deleteEverything() {
+  std::lock_guard<std::mutex> lk(dbMtx);
+
   const char* v[0]={};
   PGresult* r=PQexecParams(conn,
       "DELETE FROM users",
@@ -267,18 +298,22 @@ bool Database::deleteEverything() {
 }
 
 std::vector<std::string> Database::chatMembers(int chat_id) {
-    std::string c=std::to_string(chat_id);
-    const char* v[1]={c.c_str()};
-    PGresult* r=PQexecParams(conn,
-      R"(SELECT DISTINCT u.username
-         FROM users u
-         JOIN chat_members c ON u.user_id=c.user_id WHERE c.chat_id=$1)",
-      1,nullptr,v,nullptr,nullptr,0);
+    std::lock_guard<std::mutex> lk(dbMtx);
+    std::string c = std::to_string(chat_id);
+    const char* v[1] = { c.c_str() };
+    PGresult* r = PQexecParams(conn,
+      R"(SELECT u.username
+           FROM users u
+           JOIN chat_members m ON m.user_id=u.user_id
+          WHERE m.chat_id=$1
+        )",
+      1, nullptr, v, nullptr, nullptr, 0);
     std::vector<std::string> out;
-    for (int i=0;i<PQntuples(r);++i) {
-        out.emplace_back(
-          PQgetvalue(r,i,0)
-        );
+    if (PQresultStatus(r) == PGRES_TUPLES_OK) {
+        int n = PQntuples(r);
+        out.reserve(n);
+        for (int i = 0; i < n; ++i)
+            out.emplace_back(PQgetvalue(r,i,0));
     }
     PQclear(r);
     return out;

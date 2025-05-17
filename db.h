@@ -3,6 +3,7 @@
 #include <vector>
 #include <tuple>
 #include <utility>
+#include <mutex>
 #include <postgresql/libpq-fe.h>
 
 class Database {
@@ -43,9 +44,8 @@ public:
     int    getChatIdOfMessage(int msg_id);
 
     bool deleteEverything();
-
-    
-
 private:
     PGconn* conn;
+
+    std::mutex dbMtx;
 };

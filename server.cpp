@@ -141,8 +141,11 @@ static void clientHandler(int s) {
                     std::tie(cid,isg,name) = t;
                     out<<cid<<":"<<(isg?"1":"0")<<":"<<name<<":";
                     auto members = db->chatMembers(cid);
-                    for (auto &member : members)
-                        out << member << ",";
+                    for (int i = 0; i < members.size(); i++)
+                    {
+                        if (i != members.size() - 1) out << members[i] << ",";
+                        else out << members[i];
+                    }
                     out << ";";
                 }
                 // resubscribe
@@ -187,7 +190,6 @@ static void clientHandler(int s) {
                         for (auto s2: userToSockets[u])
                             sendStr(s2, push);
                 } else {
-                    // group: first token is group name, then ids
                     std::string rest; iss>>std::ws; std::getline(iss,rest);
                     std::istringstream is2(rest);
                     std::string gname; is2>>gname;
@@ -243,6 +245,7 @@ static void clientHandler(int s) {
 
                 std::string res = out.str();
                 res.pop_back(); //last ;
+                res += "\n";
 
                 sendStr(s, res);
             }
