@@ -115,46 +115,51 @@ bool Database::isUserInChat(int chat_id,int user_id) {
     return yes;
 }
 
-bool Database::storeMessage(int chat_id,int sender_id,const std::string& content) {
+int Database::storeMessage(int chat_id,int sender_id,const std::string& content) {
     std::lock_guard<std::mutex> lk(dbMtx);
 
     std::ostringstream a,b; a<<chat_id; b<<sender_id;
     const char* v[3]={a.str().c_str(),b.str().c_str(),content.c_str()};
-    PGresult* r=PQexecParams(conn,
-        "INSERT INTO messages(chat_id,sender_id,content) VALUES($1,$2,$3)",
+    PGresult* r = PQexecParams(conn,
+        "INSERT INTO messages(chat_id,sender_id,content) "
+        "VALUES($1,$2,$3) RETURNING msg_id",
         3,nullptr,v,nullptr,nullptr,0);
-    bool ok=(PQresultStatus(r)==PGRES_COMMAND_OK);
+    int id = -1;
+    if (PQntuples(r)==1) id = std::stoi(PQgetvalue(r,0,0));
     PQclear(r);
-    return ok;
+    return id;
 }
 
-std::vector<std::tuple<std::string,std::string,std::string>>  Database::getChatHistory(int chat_id,int user_id) {
+std::vector<std::tuple<int, std::string,std::string,std::string>>  Database::getChatHistory(int chat_id,int user_id) {
     std::lock_guard<std::mutex> lk(dbMtx);
 
     std::string c=std::to_string(chat_id), u=std::to_string(user_id);
     const char* v[2]={c.c_str(),u.c_str()};
     PGresult* r = PQexecParams(conn,
-        R"(SELECT to_char(m.created_at,'YYYY-MM-DD HH24:MI') AS ts,
-                  u.username, m.content
-           FROM messages m
-           JOIN users u ON m.sender_id=u.user_id
-           LEFT JOIN user_deleted_messages d
-             ON d.msg_id=m.msg_id AND d.user_id=$2
-           WHERE m.chat_id=$1
-             AND NOT m.deleted
-             AND d.msg_id IS NULL
-           ORDER BY m.created_at)",
-        2,nullptr,v,nullptr,nullptr,0);
+     R"(SELECT m.msg_id,
+               to_char(m.created_at,'YYYY-MM-DD HH24:MI') AS ts,
+               u.username,
+               m.content
+        FROM messages m
+        JOIN users u ON m.sender_id=u.user_id
+          LEFT JOIN user_deleted_messages d
+            ON d.msg_id=m.msg_id AND d.user_id=$2
+          WHERE m.chat_id=$1
+            AND NOT m.deleted
+            AND d.msg_id IS NULL
+          ORDER BY m.created_at)",
+         2,nullptr,v,nullptr,nullptr,0);
 
-    std::vector<std::tuple<std::string,std::string,std::string>> out;
+    std::vector<std::tuple<int,std::string,std::string,std::string>> out;
     if (PQresultStatus(r) == PGRES_TUPLES_OK) {
         int n = PQntuples(r);
         out.reserve(n);
         for (int i = 0; i < n; ++i) {
-            std::string date = PQgetvalue(r,i,0);
-            std::string username = PQgetvalue(r,i,1);
-            std::string content = PQgetvalue(r,i,2);
-            out.emplace_back(date, username, content);
+            int msg_id = std::stoi(PQgetvalue(r,i,0));
+            std::string date = PQgetvalue(r,i,1);
+            std::string username = PQgetvalue(r,i,2);
+            std::string content = PQgetvalue(r,i,3);
+            out.emplace_back(msg_id, date, username, content);
         }
     } else {
         std::cerr << "listUserChats failed: " << PQerrorMessage(conn);
@@ -317,4 +322,18 @@ std::vector<std::string> Database::chatMembers(int chat_id) {
     }
     PQclear(r);
     return out;
+}
+
+int Database::getChatIdByMessage(int msg_id) {
+    std::lock_guard<std::mutex> lk(dbMtx);
+    std::string s = std::to_string(msg_id);
+    const char* v[1] = { s.c_str() };
+    PGresult* r = PQexecParams(conn,
+        "SELECT chat_id FROM messages WHERE msg_id=$1",
+        1,nullptr,v,nullptr,nullptr,0);
+    int cid = -1;
+    if (PQntuples(r)==1)
+        cid = std::stoi(PQgetvalue(r,0,0));
+    PQclear(r);
+    return cid;
 }

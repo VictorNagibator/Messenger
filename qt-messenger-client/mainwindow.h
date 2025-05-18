@@ -11,6 +11,13 @@
 #include <QMap>
 #include <QHash>
 
+struct Message {
+    int     id;
+    QString date;
+    QString author;
+    QString text;
+};
+
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
@@ -26,6 +33,8 @@ private slots:
     void onSend();
     void onSocketReadyRead();
     void onChatViewContextMenu(const QPoint &pt);
+    void redrawChatFromCache();
+
 
 private:
     // UI
@@ -64,6 +73,12 @@ private:
     QStringList pendingGroupNames;    // исходные юзернеймы
     QVector<int> pendingGroupIds;     // resolved user IDs
 
+    QMap<int,int> blockToMsgId;  
+    QHash<int, QVector<Message>> cache;
+
+    Message lastMessage;
+
     void sendCmd(const QString &cmd);
+
     static const QString AES_KEY;
 };

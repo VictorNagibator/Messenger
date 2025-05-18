@@ -216,9 +216,13 @@ static void clientHandler(int s) {
                     sendStr(s,"ERROR No chat access\n");
                     continue;
                 }
-                bool ok = db->storeMessage(cid,userId,msg);
-                sendStr(s, ok?"OK SENT\n":"ERROR\n");
-                if (ok) {
+                int id = db->storeMessage(cid,userId,msg);
+                
+                std::ostringstream out;
+                out << "OK SENT " << id << "\n";
+
+                sendStr(s, id? out.str() :"ERROR\n");
+                if (id) {
                     std::lock_guard sl(subMtx);
                     for (int sock2:subscribers[cid])
                             if (sock2 != s)
@@ -233,21 +237,21 @@ static void clientHandler(int s) {
                 }
 
                 std::ostringstream out;
+                out << "HISTORY ";
 
-                out << "HISTORY "; 
-
+                // теперь getChatHistory отдаёт tuple<msg_id,date,username,content>
                 auto messages = db->getChatHistory(cid,userId);
-                for (auto &message : messages) {
-                    std::string date; std::string name;; std::string content;
-                    std::tie(date,name,content) = message;
-                    out << "[" << date << "]" << " " << name << ": " << content << ";";
+                for (auto &t : messages) {
+                    int    msg_id;
+                    std::string date, username, content;
+                    std::tie(msg_id, date, username, content) = t;
+                    out << "[" << date << "] "
+                        << username << ": "
+                        << content
+                        << " (id=" << msg_id << ");";
                 }
-
-                std::string res = out.str();
-                res.pop_back(); //last ;
-                res += "\n";
-
-                sendStr(s, res);
+                out << "\n";
+                sendStr(s, out.str());
             }
             // DELETE — удаление у себя
             else if (cmd == "DELETE") {
@@ -256,21 +260,41 @@ static void clientHandler(int s) {
                 int sender = db->getMessageSender(msg_id);
                 if (sender == userId) {
                     bool ok = db->deleteMessageForUser(msg_id, userId);
-                    sendStr(s, ok ? "OK\n" : "ERROR\n");
+                    std::ostringstream notif;
+                    notif << "MSG_DELETED " << msg_id << "\n";
+                    sendStr(s, ok ? notif.str() : "ERROR\n");
                 } else {
                     sendStr(s, "ERROR No rights\n");
                 }
             }
-            // DELETE_GLOBAL — удаление для всех
             else if (cmd == "DELETE_GLOBAL") {
-                int msg_id; 
+                int msg_id;
                 iss >> msg_id;
                 int sender = db->getMessageSender(msg_id);
-                if (sender == userId) {
-                    bool ok = db->deleteMessageGlobal(msg_id);
-                    sendStr(s, ok ? "OK\n" : "ERROR\n");
-                } else {
+                if (sender != userId) {
                     sendStr(s, "ERROR No rights\n");
+                    continue;
+                }
+                // 1) пометить в БД
+                bool ok = db->deleteMessageGlobal(msg_id);
+                if (!ok) {
+                    sendStr(s, "ERROR\n");
+                    continue;
+                }
+
+                // 2) разослать всем подписчикам чата уведомление
+                //    сначала найдём chat_id (можно хранить map msg->chat, 
+                //    но проще — запросить в БД)
+                int chat_id = db->getChatIdByMessage(msg_id);
+                std::ostringstream notif;
+                notif << "MSG_DELETED " << msg_id << "\n";
+
+                std::lock_guard lk(subMtx);
+                auto it = subscribers.find(chat_id);
+                if (it != subscribers.end()) {
+                    for (int sock2 : it->second) {
+                        sendStr(sock2, notif.str());
+                    }
                 }
             }
             else if (cmd=="GET_USER_ID") {

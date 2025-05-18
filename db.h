@@ -22,10 +22,10 @@ public:
     bool addUserToChat(int chat_id, int user_id);
     bool isUserInChat(int chat_id, int user_id);
 
-    bool storeMessage(int chat_id, int sender_id, const std::string& content);
+    int storeMessage(int chat_id, int sender_id, const std::string& content);
 
     // Теперь принимает user_id, чтобы отфильтровать «удалённое для себя»
-    std::vector<std::tuple<std::string,std::string,std::string>>  getChatHistory(int chat_id, int user_id);
+    std::vector<std::tuple<int, std::string, std::string, std::string>> getChatHistory(int chat_id,int user_id);
 
     // Удалить глобально (для всех) — должен вызывать только автор
     bool deleteMessageGlobal(int msg_id);
@@ -41,7 +41,7 @@ public:
     int    getMessageSender(int msg_id);
 
     /// Возвращает chat_id, в котором было msg_id
-    int    getChatIdOfMessage(int msg_id);
+    int    getChatIdByMessage(int msg_id);
 
     bool deleteEverything();
 private:

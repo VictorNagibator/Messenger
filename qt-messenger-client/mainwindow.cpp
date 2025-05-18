@@ -8,6 +8,7 @@
 #include <QDebug>
 #include <QMenu>
 #include <QRegularExpression>
+#include <QTextBlock>
 #include "crypto.h"
 
 const QString MainWindow::AES_KEY = QString::fromUtf8("01234567890123456789012345678901");
@@ -100,11 +101,14 @@ MainWindow::MainWindow(QWidget *parent)
         h->addWidget(chatsList, 1);
 
         auto *r = new QVBoxLayout();
+
         chatView = new QTextEdit(pageChats);
         chatView->setReadOnly(true);
+
         chatView->setContextMenuPolicy(Qt::CustomContextMenu);
         connect(chatView, &QWidget::customContextMenuRequested,
-                this, &MainWindow::onChatViewContextMenu);
+                this,    &MainWindow::onChatViewContextMenu);
+
         r->addWidget(chatView, 1);
 
         auto *sh = new QHBoxLayout();
@@ -134,28 +138,34 @@ void MainWindow::sendCmd(const QString &cmd) {
     socket->write(cmd.toUtf8() + "\n");
 }
 
-// Контекстное меню в chatView
+void MainWindow::redrawChatFromCache() {
+    chatView->clear();
+    for (const Message &m : cache[currentChatId]) {
+        chatView->append(
+          QString("[%1] %2: %3")
+            .arg(m.date, m.author, m.text)
+        );
+    }
+}
+
 void MainWindow::onChatViewContextMenu(const QPoint &pt) {
     QTextCursor cursor = chatView->cursorForPosition(pt);
-    cursor.select(QTextCursor::LineUnderCursor);
-    QString line = cursor.selectedText();
-    QRegularExpression re(R"(\(id=(\d+)\))");
-    auto m = re.match(line);
-    if (!m.hasMatch()) return;
-    QString msgId = m.captured(1);
+    QTextBlock  block  = cursor.block();                    // теперь работает
+    int blockNo = block.blockNumber();
 
+    // дальше вы можете по номеру блока смотреть cache[currentChatId][blockNo].id
+    // и удалять именно то сообщение.
     QMenu menu;
     QAction *delMe  = menu.addAction("Delete for me");
     QAction *delAll = menu.addAction("Delete for all");
-    QAction *act = menu.exec(chatView->viewport()->mapToGlobal(pt));
+    QAction *act = menu.exec(QCursor::pos());
+    if (!act) return;
+    int msgId = cache[currentChatId][blockNo].id;
     if (act == delMe) {
-        sendCmd("DELETE " + msgId);
+        sendCmd(QString("DELETE %1").arg(msgId));
     } else if (act == delAll) {
-        sendCmd("DELETE_GLOBAL " + msgId);
+        sendCmd(QString("DELETE_GLOBAL %1").arg(msgId));
     }
-    // удаляем строку локально
-    cursor.removeSelectedText();
-    cursor.deleteChar();
 }
 
 // Слот: зарегистрироваться
@@ -186,15 +196,32 @@ void MainWindow::onLogout() {
     chatView->clear();
     usernameEdit->clear();
     passwordEdit->clear();
+
+    cache.clear();
+
     stack->setCurrentWidget(pageLogin);
 }
 
-// Слот: выбран чат из списка
 void MainWindow::onChatSelected() {
     auto *it = chatsList->currentItem();
     if (!it) return;
     currentChatId = it->data(Qt::UserRole).toInt();
     chatView->clear();
+
+    // Если есть кэш — рисуем из него
+    if (cache.contains(currentChatId)) {
+        const QVector<Message> &msgs = cache[currentChatId];
+        for (const Message &m : msgs) {
+            // Формируем строку без «(id=...)»
+            chatView->append(
+                QString("[%1] %2: %3")
+                    .arg(m.date, m.author, m.text)
+            );
+        }
+        return;
+    }
+
+    // Иначе — запрашиваем у сервера
     sendCmd(QString("HISTORY %1").arg(currentChatId));
 }
 
@@ -212,6 +239,10 @@ void MainWindow::onSend() {
     QString now = QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm");
     chatView->append(QString("[%1] %2: %3").arg(now, myUsername, msg));
     messageEdit->clear();
+
+    lastMessage.date = now;
+    lastMessage.author = myUsername;
+    lastMessage.text = msg;
 }
 
 // Слот: пришли данные от сервера
@@ -274,6 +305,18 @@ void MainWindow::onSocketReadyRead() {
             continue;
         }
 
+        if (line.startsWith("OK SENT")) {
+            bool ok;
+            int mid = line.mid(QString("OK SENT ").length()).toInt(&ok);
+            if (ok) {
+                lastMessage.id = mid;
+                cache[currentChatId].append(lastMessage);
+                redrawChatFromCache();
+            }
+            continue;
+        }
+
+
         // 4) Новый чат
         if (line.startsWith("NEW_CHAT")) {
             sendCmd("LIST_CHATS");
@@ -324,26 +367,47 @@ void MainWindow::onSocketReadyRead() {
         }
 
         // 7) История
-        if (line.startsWith("HISTORY")) {
+        // в onSocketReadyRead(), при обработке HISTORY
+        if (line.startsWith("HISTORY ")) {
             chatView->clear();
-
-            auto strings = line.mid(8).split(";");
-
-            for (auto &string : strings) {
-                chatView->append(string);
+            QVector<Message> msgs;
+            auto chunks = line.mid(8).split(";", Qt::SkipEmptyParts);
+            for (const QString &chunk : chunks) {
+                QRegularExpression re(R"(\[([^\]]+)\]\s+([^:]+):\s+(.+)\s+\(id=(\d+)\))");
+                auto m = re.match(chunk);
+                if (!m.hasMatch()) continue;
+                Message msg;
+                msg.date   = m.captured(1);
+                msg.author = m.captured(2);
+                msg.text   = m.captured(3);
+                msg.id     = m.captured(4).toInt();
+                msgs.append(msg);
+                chatView->append(
+                    QString("[%1] %2: %3")
+                        .arg(msg.date, msg.author, msg.text)
+                );
             }
+            // вот тут сохраняем в кэш
+            cache[currentChatId] = msgs;
             continue;
         }
 
+
         // 8) Глобальное удаление
         if (line.startsWith("MSG_DELETED ")) {
-            int mid = line.mid(12).toInt();
-            // удаляем все строки с "(id=mid)"
-            QStringList all = chatView->toPlainText().split('\n');
+            bool ok; int mid = line.mid(QString("MSG_DELETED ").length()).toInt(&ok);
+            if (!ok) continue;
+            // 1) обновляем кэш
+            auto &vec = cache[currentChatId];
+            for (int i = 0; i < vec.size(); ++i) {
+                if (vec[i].id == mid) { vec.remove(i); break; }
+            }
+            // 2) перерисовываем окно
             chatView->clear();
-            for (auto &l : all)
-                if (!l.contains("(id=" + QString::number(mid) + ")"))
-                    chatView->append(l);
+            for (const Message &m : vec) {
+                chatView->append(QString("[%1] %2: %3")
+                                .arg(m.date, m.author, m.text));
+            }
             continue;
         }
 
