@@ -9,21 +9,30 @@
 #include <QMenu>
 #include <QRegularExpression>
 #include <QTextBlock>
-#include "crypto.h"
-
-const QString MainWindow::AES_KEY = QString::fromUtf8("01234567890123456789012345678901");
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
-    // Сетевой сокет
-    socket = new QTcpSocket(this);
-    socket->connectToHost("127.0.0.1", 12345);
-    connect(socket, &QTcpSocket::readyRead,    this, &MainWindow::onSocketReadyRead);
-    connect(socket, &QTcpSocket::connected,     this, [](){ qDebug() << "[socket] connected"; });
-    connect(socket, &QTcpSocket::errorOccurred, this, [](QAbstractSocket::SocketError e){
-        qDebug() << "[socket] error" << e;
+    socket = new QSslSocket(this);
+
+    // Игнорируем все SSL‑ошибки (не проверяем цепочку сертификатов)
+    connect(socket,
+            SIGNAL(sslErrors(const QList<QSslError>&)),
+            socket,
+            SLOT(ignoreSslErrors()));
+
+    // Дожидаемся, когда TLS‑рукопожатие успешно завершится
+    connect(socket, &QSslSocket::encrypted, this, [](){
+        qDebug() << "TLS handshake completed";
     });
+
+    // После установки TLS читаем данные из сокета
+    connect(socket, &QSslSocket::readyRead, this, &MainWindow::onSocketReadyRead);
+
+    // Запуск рукопожатия
+    socket->setPeerVerifyMode(QSslSocket::VerifyNone);
+    socket->connectToHostEncrypted("127.0.0.1", 12345);
+
 
     // Стек страниц
     stack = new QStackedWidget(this);
@@ -230,10 +239,7 @@ void MainWindow::onSend() {
     if (currentChatId < 0) return;
     QString msg = messageEdit->text().trimmed();
     if (msg.isEmpty()) return;
-    QByteArray bin = QByteArray::fromStdString(
-        encrypt(msg.toStdString(), AES_KEY.toStdString()));
-    QString hex = bin.toHex();
-    sendCmd(QString("SEND %1 ").arg(currentChatId) + hex);
+    sendCmd(QString("SEND %1 ").arg(currentChatId) + msg);
 
     //show message
     QString now = QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm");

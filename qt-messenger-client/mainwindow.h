@@ -1,7 +1,7 @@
 #pragma once
 
 #include <QMainWindow>
-#include <QTcpSocket>
+#include <QSslSocket>
 #include <QStackedWidget>
 #include <QLineEdit>
 #include <QPushButton>
@@ -55,7 +55,7 @@ private:
     QPushButton    *sendButton;
 
     // Network
-    QTcpSocket     *socket;
+    QSslSocket *socket;
     int             myUserId       = -1;
     QString         myUsername;
     int             currentChatId  = -1;
