@@ -37,7 +37,6 @@ MainWindow::MainWindow(QWidget *parent)
 
     // 1) Определяем путь к CA (server.crt)
     QString caPath = QCoreApplication::applicationDirPath() + "/server.crt";
-    qDebug() << "Loading CA from" << caPath << "exists?" << QFile::exists(caPath);
 
     // 2) Читаем файл в память и парсим сертификат PEM
     QList<QSslCertificate> caCerts;
@@ -49,9 +48,9 @@ MainWindow::MainWindow(QWidget *parent)
     }
 
     if (caCerts.isEmpty()) {
-        qWarning() << "Failed to load any CA certificates!";
+        qWarning() << "Не удалось загрузить сертификат!";
     } else {
-        qDebug() << "Loaded" << caCerts.count() << "CA cert(s)";
+        qDebug() << "Сертификат загружен!";
     }
 
     // 3) Настраиваем socket
@@ -65,7 +64,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     // 1) Логгируем переходы состояний (TCP → TLS → готово)
     connect(socket, &QAbstractSocket::stateChanged, this, [](QAbstractSocket::SocketState st){
-        qDebug() << "Socket state changed to" << st;
+        qDebug() << "Состояние сокета изменено на:" << st;
     });
 
     // 2) Логгируем все SSL‑ошибки с подробностями
@@ -74,18 +73,18 @@ MainWindow::MainWindow(QWidget *parent)
             this,
             [this](const QList<QSslError> &errs){
                 for (auto &e : errs)
-                    qWarning() << "SSL error:" << e.errorString();
+                    qWarning() << "SSL ошибка:" << e.errorString();
                 socket->ignoreSslErrors();  // чтобы рукопожатие всё-таки продолжилось
             });
 
     // 3) Логгируем любые сетевые ошибки
     connect(socket, &QAbstractSocket::errorOccurred, this, [](QAbstractSocket::SocketError err){
-        qWarning() << "Network error:" << err;
+        qWarning() << "Ошибка сети:" << err;
     });
 
     // 4) Логгируем успешный конец TLS‑рукопожатия
     connect(socket, &QSslSocket::encrypted, this, [](){
-        qDebug() << "TLS handshake completed";
+        qDebug() << "TLS рукопожатие завершено!";
     });
     connect(socket, &QSslSocket::readyRead, this, &MainWindow::onSocketReadyRead);
 
@@ -101,18 +100,18 @@ MainWindow::MainWindow(QWidget *parent)
     pageLogin = new QWidget(this);
     {
         auto *lay = new QVBoxLayout(pageLogin);
-        lay->addWidget(new QLabel("<h3>Login / Register</h3>", pageLogin));
+        lay->addWidget(new QLabel("<h3>Вход / Регистрация</h3>", pageLogin));
         usernameEdit = new QLineEdit(pageLogin);
-        usernameEdit->setPlaceholderText("Username");
+        usernameEdit->setPlaceholderText("Имя пользователя");
         lay->addWidget(usernameEdit);
         passwordEdit = new QLineEdit(pageLogin);
         passwordEdit->setEchoMode(QLineEdit::Password);
-        passwordEdit->setPlaceholderText("Password");
+        passwordEdit->setPlaceholderText("Пароль");
         lay->addWidget(passwordEdit);
 
         auto *h = new QHBoxLayout();
-        loginButton    = new QPushButton("Login",    pageLogin);
-        registerButton = new QPushButton("Register", pageLogin);
+        loginButton    = new QPushButton("Вход",    pageLogin);
+        registerButton = new QPushButton("Регистрация", pageLogin);
         h->addWidget(loginButton);
         h->addWidget(registerButton);
         lay->addLayout(h);
@@ -129,9 +128,9 @@ MainWindow::MainWindow(QWidget *parent)
 
         // Верхняя панель: New Chat / New Group / Logout
         auto *top = new QHBoxLayout();
-        newChatButton  = new QPushButton("New Chat",  pageChats);
-        newGroupButton = new QPushButton("New Group", pageChats);
-        logoutButton   = new QPushButton("Logout",    pageChats);
+        newChatButton  = new QPushButton("Новый личный чат",  pageChats);
+        newGroupButton = new QPushButton("Новая группа", pageChats);
+        logoutButton   = new QPushButton("Выйти из аккаунта",    pageChats);
         top->addWidget(newChatButton);
         top->addWidget(newGroupButton);
         top->addStretch();
@@ -140,8 +139,8 @@ MainWindow::MainWindow(QWidget *parent)
 
         connect(newChatButton,  &QPushButton::clicked, this, [this](){
             bool ok;
-            QString name = QInputDialog::getText(this,"New Chat",
-                              "Enter peer username:", QLineEdit::Normal, {}, &ok);
+            QString name = QInputDialog::getText(this,"Новый чат",
+                              "Введите имя пользователя:", QLineEdit::Normal, {}, &ok);
             if (!ok || name.isEmpty()) return;
             pendingPeerName = name;
             expectingUserId = true;
@@ -150,10 +149,10 @@ MainWindow::MainWindow(QWidget *parent)
         connect(newGroupButton, &QPushButton::clicked, this, [this](){
             bool ok;
             pendingGroupName = QInputDialog::getText(
-                this, "New Group", "Group name:", QLineEdit::Normal, {}, &ok);
+                this, "Новая группа", "Название группы:", QLineEdit::Normal, {}, &ok);
             if (!ok || pendingGroupName.isEmpty()) return;
             QString members = QInputDialog::getText(
-                this, "New Group", "Usernames (space-separated):",
+                this, "Новая группа", "Введите имена пользователей (через пробел):",
                 QLineEdit::Normal, {}, &ok);
             if (!ok) return;
             pendingGroupNames = members.split(' ', Qt::SkipEmptyParts);
@@ -181,7 +180,7 @@ MainWindow::MainWindow(QWidget *parent)
 
         auto *sh = new QHBoxLayout();
         messageEdit = new QLineEdit(pageChats);
-        sendButton  = new QPushButton("Send", pageChats);
+        sendButton  = new QPushButton("Отправить", pageChats);
         sh->addWidget(messageEdit, 1);
         sh->addWidget(sendButton);
         r->addLayout(sh);
@@ -224,8 +223,8 @@ void MainWindow::onChatViewContextMenu(const QPoint &pt) {
     // дальше вы можете по номеру блока смотреть cache[currentChatId][blockNo].id
     // и удалять именно то сообщение.
     QMenu menu;
-    QAction *delMe  = menu.addAction("Delete for me");
-    QAction *delAll = menu.addAction("Delete for all");
+    QAction *delMe  = menu.addAction("Удалить для себя");
+    QAction *delAll = menu.addAction("Удалить для всех");
     QAction *act = menu.exec(QCursor::pos());
     if (!act) return;
     int msgId = cache[currentChatId][blockNo].id;
@@ -240,7 +239,7 @@ void MainWindow::onChatViewContextMenu(const QPoint &pt) {
 void MainWindow::onRegister() {
     QString u = usernameEdit->text(), p = passwordEdit->text();
     if (u.isEmpty() || p.isEmpty()) {
-        QMessageBox::warning(this,"Error","Enter username & password");
+        QMessageBox::warning(this,"Ошибка","Введите имя пользователя и пароль");
         return;
     }
     sendCmd(QString("REGISTER %1 %2").arg(u,p));
@@ -250,7 +249,7 @@ void MainWindow::onRegister() {
 void MainWindow::onLogin() {
     QString u = usernameEdit->text(), p = passwordEdit->text();
     if (u.isEmpty() || p.isEmpty()) {
-        QMessageBox::warning(this,"Error","Enter username & password");
+        QMessageBox::warning(this,"Ошибка","Введите имя пользователя и пароль");
         return;
     }
     sendCmd(QString("LOGIN %1 %2").arg(u,p));
@@ -316,15 +315,15 @@ void MainWindow::onSocketReadyRead() {
     QStringList lines = QString::fromUtf8(data)
                           .split('\n', Qt::SkipEmptyParts);
     for (const QString &line : lines) {
-        qDebug() << "RECV:" << line;
+        qDebug() << "[recievedFromServer]:" << line;
 
         // 1) Ответ на GET_USER_ID (для создания чата)
         if (expectingUserId) {
             expectingUserId = false;
             bool ok; int uid = line.toInt(&ok);
             if (!ok || uid<=0) {
-                QMessageBox::warning(this,"Error",
-                    "User \"" + pendingPeerName + "\" not found");
+                QMessageBox::warning(this,"Ошибка",
+                    "Пользователь \"" + pendingPeerName + "\" не найден!");
             } else {
                 // если мы в процессе создания группы
                 if (creatingGroup) {
@@ -351,8 +350,8 @@ void MainWindow::onSocketReadyRead() {
 
         // 2) Повторный приватный чат
         if (line == "ERROR CHAT_EXISTS") {
-            QMessageBox::information(this,"Info",
-                                     "Private chat already exists.");
+            QMessageBox::warning(this,"Ошибка",
+                                     "Личный чат с данным пользователем уже существует");
             continue;
         }
 
@@ -366,7 +365,8 @@ void MainWindow::onSocketReadyRead() {
         }
 
         if (line.startsWith("OK REG")) {
-            QMessageBox::information(this, "Success!", "Successful sign in! Now try logging in...");
+            QMessageBox::information(this, "Успешная регистрация!", "Теперь заходим в аккаунт...");
+            onLogin();
             continue;
         }
 
@@ -476,9 +476,14 @@ void MainWindow::onSocketReadyRead() {
             continue;
         }
 
+        if (line.startsWith("ERROR USER_EXISTS")) {
+            QMessageBox::warning(this,"Ошибка", "Такой пользователь уже существует!");
+            continue;
+        }
+
         // 9) Ошибки
         if (line.startsWith("ERROR")) {
-            QMessageBox::warning(this,"Error", line);
+            QMessageBox::warning(this,"Ошибка", line);
             continue;
         }
     }
