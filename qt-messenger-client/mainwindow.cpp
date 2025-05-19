@@ -13,6 +13,7 @@
 #include <QCoreApplication>
 #include <QFile>
 #include <QSslConfiguration>
+#include <QNetworkProxy>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -87,6 +88,8 @@ MainWindow::MainWindow(QWidget *parent)
         qDebug() << "TLS handshake completed";
     });
     connect(socket, &QSslSocket::readyRead, this, &MainWindow::onSocketReadyRead);
+
+    socket->setProxy(QNetworkProxy::NoProxy);
 
     socket->connectToHostEncrypted(host, port);
 
