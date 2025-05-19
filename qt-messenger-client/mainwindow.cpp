@@ -100,19 +100,32 @@ MainWindow::MainWindow(QWidget *parent)
     pageLogin = new QWidget(this);
     {
         auto *lay = new QVBoxLayout(pageLogin);
-        lay->addWidget(new QLabel("<h3>Вход / Регистрация</h3>", pageLogin));
+
+        // 1) Растяжка сверху — «пушит» контент вниз
+        lay->addStretch(1);
+
+        // 2) Заголовок
+        auto *title = new QLabel("<h3>Вход / Регистрация</h3>", pageLogin);
+        title->setAlignment(Qt::AlignHCenter);
+        lay->addWidget(title);
+
+        lay->addStretch(1);
+
+        // 3) Поля ввода
         usernameEdit = new QLineEdit(pageLogin);
         usernameEdit->setPlaceholderText("Имя пользователя");
         lay->addWidget(usernameEdit);
+
         passwordEdit = new QLineEdit(pageLogin);
         passwordEdit->setEchoMode(QLineEdit::Password);
         passwordEdit->setPlaceholderText("Пароль");
         lay->addWidget(passwordEdit);
 
+        // 4) Кнопки по центру
         auto *h = new QHBoxLayout();
-        loginButton    = new QPushButton("Вход",    pageLogin);
-        registerButton = new QPushButton("Регистрация", pageLogin);
-        h->addWidget(loginButton);
+        loginButton    = new QPushButton("Войти",         pageLogin);
+        registerButton = new QPushButton("Зарегистрироваться", pageLogin);
+        h->addWidget(loginButton); 
         h->addWidget(registerButton);
         lay->addLayout(h);
 
