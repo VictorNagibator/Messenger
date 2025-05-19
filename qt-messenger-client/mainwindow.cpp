@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QMessageBox>
@@ -9,30 +10,42 @@
 #include <QMenu>
 #include <QRegularExpression>
 #include <QTextBlock>
+#include <QCoreApplication>
+#include <QFile>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
+    QString host = "127.0.0.1";
+    int     port = 12345;
+
+    QString cfgPath = "./config.ini";
+
+    QFile f(cfgPath);
+    if (f.open(QIODevice::ReadOnly|QIODevice::Text)) {
+        QTextStream in(&f);
+        while (!in.atEnd()) {
+            const QString line = in.readLine().trimmed();
+            if (line.startsWith("host="))
+            host = line.mid(sizeof("host=")-1).trimmed();
+            else if (line.startsWith("port="))
+            port = line.mid(sizeof("port=")-1).toInt();
+        }
+    }
+
+    // 3) инициализируем TLS‑сокет
     socket = new QSslSocket(this);
-
-    // Игнорируем все SSL‑ошибки (не проверяем цепочку сертификатов)
-    connect(socket,
-            SIGNAL(sslErrors(const QList<QSslError>&)),
-            socket,
-            SLOT(ignoreSslErrors()));
-
-    // Дожидаемся, когда TLS‑рукопожатие успешно завершится
+    socket->setPeerVerifyMode(QSslSocket::VerifyNone);
+    connect(socket, SIGNAL(sslErrors(const QList<QSslError>&)),
+            socket, SLOT(ignoreSslErrors()));
     connect(socket, &QSslSocket::encrypted, this, [](){
         qDebug() << "TLS handshake completed";
     });
-
-    // После установки TLS читаем данные из сокета
     connect(socket, &QSslSocket::readyRead, this, &MainWindow::onSocketReadyRead);
 
-    // Запуск рукопожатия
-    socket->setPeerVerifyMode(QSslSocket::VerifyNone);
-    socket->connectToHostEncrypted("127.0.0.1", 12345);
-
+    // 4) и только теперь — подключаемся к тому, что в конфиге
+    qDebug() << "Connecting to" << host << ":" << port;
+    socket->connectToHostEncrypted(host, port);
 
     // Стек страниц
     stack = new QStackedWidget(this);
