@@ -12,6 +12,7 @@
 #include <QTextBlock>
 #include <QCoreApplication>
 #include <QFile>
+#include <QSslConfiguration>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -33,18 +34,60 @@ MainWindow::MainWindow(QWidget *parent)
         }
     }
 
-    // 3) инициализируем TLS‑сокет
+    // 1) Определяем путь к CA (server.crt)
+    QString caPath = QCoreApplication::applicationDirPath() + "/server.crt";
+    qDebug() << "Loading CA from" << caPath << "exists?" << QFile::exists(caPath);
+
+    // 2) Читаем файл в память и парсим сертификат PEM
+    QList<QSslCertificate> caCerts;
+    QFile fCa(caPath);
+    if (fCa.open(QIODevice::ReadOnly)) {
+        QByteArray pem = fCa.readAll();
+        caCerts = QSslCertificate::fromData(pem, QSsl::Pem);
+        fCa.close();
+    }
+
+    if (caCerts.isEmpty()) {
+        qWarning() << "Failed to load any CA certificates!";
+    } else {
+        qDebug() << "Loaded" << caCerts.count() << "CA cert(s)";
+    }
+
+    // 3) Настраиваем socket
     socket = new QSslSocket(this);
     socket->setPeerVerifyMode(QSslSocket::VerifyNone);
-    connect(socket, SIGNAL(sslErrors(const QList<QSslError>&)),
-            socket, SLOT(ignoreSslErrors()));
+
+    // Подменяем конфигурацию, добавляем наш CA
+    QSslConfiguration cfg = socket->sslConfiguration();
+    cfg.setCaCertificates(caCerts);
+    socket->setSslConfiguration(cfg);
+
+    // 1) Логгируем переходы состояний (TCP → TLS → готово)
+    connect(socket, &QAbstractSocket::stateChanged, this, [](QAbstractSocket::SocketState st){
+        qDebug() << "Socket state changed to" << st;
+    });
+
+    // 2) Логгируем все SSL‑ошибки с подробностями
+    connect(socket,
+            static_cast<void(QSslSocket::*)(const QList<QSslError>&)>(&QSslSocket::sslErrors),
+            this,
+            [this](const QList<QSslError> &errs){
+                for (auto &e : errs)
+                    qWarning() << "SSL error:" << e.errorString();
+                socket->ignoreSslErrors();  // чтобы рукопожатие всё-таки продолжилось
+            });
+
+    // 3) Логгируем любые сетевые ошибки
+    connect(socket, &QAbstractSocket::errorOccurred, this, [](QAbstractSocket::SocketError err){
+        qWarning() << "Network error:" << err;
+    });
+
+    // 4) Логгируем успешный конец TLS‑рукопожатия
     connect(socket, &QSslSocket::encrypted, this, [](){
         qDebug() << "TLS handshake completed";
     });
     connect(socket, &QSslSocket::readyRead, this, &MainWindow::onSocketReadyRead);
 
-    // 4) и только теперь — подключаемся к тому, что в конфиге
-    qDebug() << "Connecting to" << host << ":" << port;
     socket->connectToHostEncrypted(host, port);
 
     // Стек страниц
