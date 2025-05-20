@@ -410,7 +410,7 @@ void MainWindow::onSocketReadyRead() {
     for (const QString &line : lines) {
         qDebug() << "[recievedFromServer]:" << line;
 
-        // 1) Ответ на GET_USER_ID (для создания чата)
+        //1) Ответ на GET_USER_ID (для создания чата)
         if (expectingUserId) {
             expectingUserId = false;
             bool ok; int uid = line.toInt(&ok);
