@@ -191,7 +191,7 @@ static void clientHandler(int clientSock) {
             }
             else if (cmd=="LIST_CHATS") {
                 if (userId<0) {
-                    sendSSL(clientSock, "ERROR Not logged\n");
+                    sendSSL(clientSock, "ERROR NOT_LOGGED\n");
                     continue;
                 }
                 auto chats = db->listUserChats(userId);
@@ -229,7 +229,7 @@ static void clientHandler(int clientSock) {
                 sendSSL(clientSock,  res);
             }
             else if (cmd=="CREATE_CHAT") {
-                if (userId<0) { sendSSL(clientSock, "ERROR Not logged\n"); continue; }
+                if (userId<0) { sendSSL(clientSock, "ERROR NOT_LOGGED\n"); continue; }
                 int isGroup; iss>>isGroup;
                 if (!isGroup) {
                     int peer; iss>>peer;
@@ -268,11 +268,11 @@ static void clientHandler(int clientSock) {
                 }
             }
             else if (cmd=="SEND") {
-                if (userId<0) { sendSSL(clientSock, "ERROR Not logged\n"); continue; }
+                if (userId<0) { sendSSL(clientSock, "ERROR NOT_LOGGED\n"); continue; }
                 int cid; iss>>cid;
                 std::string msg; std::getline(iss,msg);
                 if (!db->isUserInChat(cid,userId)) {
-                    sendSSL(clientSock,"ERROR No chat access\n");
+                    sendSSL(clientSock,"ERROR NO_CHAT_ACCESS\n");
                     continue;
                 }
                 int id = db->storeMessage(cid,userId,msg);
@@ -289,10 +289,10 @@ static void clientHandler(int clientSock) {
                 }
             }
             else if (cmd=="HISTORY") {
-                if (userId<0) { sendSSL(clientSock,"ERROR Not logged\n"); continue; }
+                if (userId<0) { sendSSL(clientSock,"ERROR NOT_LOGGED\n"); continue; }
                 int cid; iss>>cid;
                 if (!db->isUserInChat(cid,userId)) {
-                    sendSSL(clientSock,"ERROR No chat access\n"); continue;
+                    sendSSL(clientSock,"ERROR NO_CHAT_ACCESS\n"); continue;
                 }
 
                 // Получаем два упорядоченных по времени списка:
@@ -380,7 +380,7 @@ static void clientHandler(int clientSock) {
                     notif << "MSG_DELETED " << msg_id << "\n";
                     sendSSL(clientSock, ok ? notif.str() : "ERROR\n");
                 } else {
-                    sendSSL(clientSock, "ERROR No rights\n");
+                    sendSSL(clientSock, "ERROR NO_RIGHTS\n");
                 }
             }
             else if (cmd == "DELETE_GLOBAL") {
@@ -388,7 +388,7 @@ static void clientHandler(int clientSock) {
                 iss >> msg_id;
                 int sender = db->getMessageSender(msg_id);
                 if (sender != userId) {
-                    sendSSL(clientSock, "ERROR No rights\n");
+                    sendSSL(clientSock, "ERROR NO_RIGHTS\n");
                     continue;
                 }
                 // 1) пометить в БД

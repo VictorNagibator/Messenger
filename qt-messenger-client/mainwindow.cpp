@@ -46,9 +46,31 @@ MainWindow::MainWindow(QWidget *parent)
                 socket->ignoreSslErrors();  //чтобы рукопожатие всё-таки продолжилось
             });
 
-    //Логгируем любые сетевые ошибки
-    connect(socket, &QAbstractSocket::errorOccurred, this, [](QAbstractSocket::SocketError err){
-        qWarning() << "Ошибка сети:" << err;
+    // 1) При сетевой ошибке (не удалось подключиться, таймаут и т.п.)
+    connect(socket, &QAbstractSocket::errorOccurred, this,
+        [this](QAbstractSocket::SocketError err) {
+            // если мы ещё не показали окно
+            static bool shown = false;
+            if (!shown) {
+                shown = true;
+                QMessageBox::critical(
+                    this,
+                    tr("Ошибка подключения"),
+                    socket->errorString()
+                );
+                qApp->quit();
+            }
+        }
+    );
+
+    // 2) При разрыве соединения после того, как оно было установлено
+    connect(socket, &QAbstractSocket::disconnected, this, [this]() {
+        QMessageBox::warning(
+            this,
+            tr("Соединение потеряно"),
+            tr("Связь с сервером была разорвана.")
+        );
+        qApp->quit();
     });
 
     //Логгируем успешный конец TLS‑рукопожатия
@@ -270,7 +292,7 @@ void MainWindow::onChatViewContextMenu(const QPoint &pt) {
     int blockNo = block.blockNumber();
 
     // дальше вы можете по номеру блока смотреть cache[currentChatId][blockNo].id
-    // и удалять именно то сообщение.
+    // и удалять именно то сообщение
     QMenu menu;
     QAction *delMe  = menu.addAction("Удалить для себя");
     QAction *delAll = menu.addAction("Удалить для всех");
@@ -600,6 +622,11 @@ void MainWindow::onSocketReadyRead() {
 
         if (line.startsWith("ERROR NOT_CORRECT")) {
             QMessageBox::warning(this,"Ошибка", "Неверное имя пользователя или пароль!");
+            continue;
+        }
+
+        if (line.startsWith("ERROR NO_RIGHTS")) {
+            QMessageBox::warning(this,"Ошибка", "Вы можете удалять только собственные сообщения!");
             continue;
         }
 
