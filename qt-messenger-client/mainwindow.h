@@ -10,6 +10,7 @@
 #include <QTimer>
 #include <QMap>
 #include <QHash>
+#include <QLabel>
 
 struct Message {
     int     id;
@@ -64,6 +65,8 @@ private:
     QString         pendingPeerName;
     QMap<int,QString> userMap;
 
+    QLabel      *userLabel;
+
     // Для контекстного меню удаления
     // (id сообщений у нас выводится (id=...))
     // и для названий чатов:
@@ -79,6 +82,4 @@ private:
     Message lastMessage;
 
     void sendCmd(const QString &cmd);
-
-    static const QString AES_KEY;
 };

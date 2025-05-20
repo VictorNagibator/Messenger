@@ -110,15 +110,34 @@ MainWindow::MainWindow(QWidget *parent)
         auto *v = new QVBoxLayout(pageChats);
 
         // Верхняя панель: New Chat / New Group / Logout
-        auto *top = new QHBoxLayout();
         newChatButton  = new QPushButton("Новый личный чат",  pageChats);
         newGroupButton = new QPushButton("Новая группа", pageChats);
-        logoutButton   = new QPushButton("Выйти из аккаунта",    pageChats);
-        top->addWidget(newChatButton);
-        top->addWidget(newGroupButton);
-        top->addStretch();
-        top->addWidget(logoutButton);
-        v->addLayout(top);
+        // Верхняя панель: логика чатов + информация о пользователе
+        auto *topBar = new QHBoxLayout();
+           // слева — кнопки
+            topBar->addWidget(newChatButton);
+            topBar->addWidget(newGroupButton);
+            topBar->addStretch(1);
+            // справа — имя пользователя + кнопка «Выйти»
+
+            auto *usernameAndExit = new QVBoxLayout();
+            userLabel = new QLabel(this);
+            userLabel->setText("");   // пока пусто
+            auto *logoutBtn = new QPushButton("Выйти из профиля", this);
+            usernameAndExit->addWidget(userLabel);
+            usernameAndExit->addWidget(logoutBtn);
+            topBar->addLayout(usernameAndExit);
+
+            connect(logoutBtn, &QPushButton::clicked, this, [this]() {
+                auto res = QMessageBox::question(this,
+                    "Подтвердите выход",
+                    "Вы уверены, что хотите выйти из профиля?",
+                    QMessageBox::Yes|QMessageBox::No);
+                if (res == QMessageBox::Yes) onLogout();
+            });
+        
+
+        v->addLayout(topBar);
 
         connect(newChatButton,  &QPushButton::clicked, this, [this](){
             bool ok;
@@ -144,7 +163,6 @@ MainWindow::MainWindow(QWidget *parent)
             expectingUserId = true;
             sendCmd("GET_USER_ID " + pendingGroupNames.first());
         });
-        connect(logoutButton, &QPushButton::clicked, this, &MainWindow::onLogout);
 
         auto *h = new QHBoxLayout();
         chatsList = new QListWidget(pageChats);
@@ -341,6 +359,7 @@ void MainWindow::onSocketReadyRead() {
         // 3) Успешный логин
         if (line.startsWith("OK LOGIN")) {
             myUserId = line.split(' ')[1].toInt();
+            userLabel->setText(QString("Пользователь: %1").arg(myUsername));
             stack->setCurrentWidget(pageChats);
 
             sendCmd("LIST_CHATS");
