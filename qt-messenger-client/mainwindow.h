@@ -7,82 +7,91 @@
 #include <QPushButton>
 #include <QListWidget>
 #include <QTextEdit>
-#include <QTimer>
-#include <QMap>
-#include <QHash>
 #include <QLabel>
-
-// Тип записи в чате — либо сообщение, либо системное событие
-struct ChatEntry {
-    enum Type { Message, Event } type;
-    QString date;      // "[2025-05-20 16:30]"
-    QString author;    // для Message — имя, для Event — пусто
-    QString text;      // содержимое или текст события
-    int     id = -1;   // для Message — msg_id, для Event не используется
-};
+#include <QMessageBox>
+#include <QInputDialog>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QDateTime>
+#include <QMenu>
+#include <QRegularExpression>
+#include <QFile>
+#include <QCoreApplication>
+#include <QNetworkProxy>
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
-    MainWindow(QWidget *parent = nullptr);
-    ~MainWindow();
+    explicit MainWindow(QWidget *parent = nullptr);
 
 private slots:
-    void onRegister();
-    void onLogin();
-    void onLogout();
-    void onChatSelected();
-    void onSend();
-    void onSocketReadyRead();
-    void onChatViewContextMenu(const QPoint &pt);
-    void onChatsListContextMenu(const QPoint &pt);
-    void redrawChatFromCache();
+    void onRegister(); //при нажатии «Зарегистрироваться»
+    void onLogin(); //при нажатии «Войти»
+    void onLogout(); //при нажатии «Выйти из профиля»
+    void onChatSelected(); //при выборе чата в списке
+    void onSend(); //при нажатии «Отправить»
+    void onSocketReadyRead(); //данные от сервера готовы к чтению
+    void onChatViewContextMenu(const QPoint &pt); //контекстное меню внутри окна чата
+    void onChatsListContextMenu(const QPoint &pt); //контекстное меню для списка чатов
+    void redrawChatFromCache(); //перерисовать историю из локального кэша
 
 private:
-    // UI
-    QStackedWidget *stack;
-    QWidget        *pageLogin;
-    QLineEdit      *usernameEdit;
-    QLineEdit      *passwordEdit;
-    QPushButton    *loginButton;
-    QPushButton    *registerButton;
+    //UI элементы
+    QStackedWidget *stack; //переключатель страниц (login <-> chats)
 
-    QWidget        *pageChats;
-    QPushButton    *logoutButton;
-    QPushButton    *newChatButton;
-    QPushButton    *newGroupButton;
-    QListWidget    *chatsList;
-    QTextEdit      *chatView;
-    QLineEdit      *messageEdit;
-    QPushButton    *sendButton;
+    //Страница логина
+    QWidget *pageLogin;
+    QLineEdit *usernameEdit; //ввод имени
+    QLineEdit *passwordEdit; //ввод пароля
+    QPushButton *loginButton; //кнопка «Войти»
+    QPushButton *registerButton; //кнопка «Зарегистрироваться»
 
-    // Network
-    QSslSocket *socket;
-    int             myUserId       = -1;
-    QString         myUsername;
-    int             currentChatId  = -1;
-    bool            expectingUserId = false;
-    bool            creatingGroup = false;
-    QString         pendingPeerName;
-    QMap<int,QString> userMap;
+    //Страница чатов
+    QWidget *pageChats;
+    QLabel *userLabel; //отображает «Пользователь: <имя>»
+    QPushButton *newChatButton; //кнопка «Новый личный чат»
+    QPushButton *newGroupButton; //кнопка «Новая группа»
+    QListWidget *chatsList; //список доступных чатов
+    QTextEdit *chatView; //окно истории сообщений
+    QLineEdit *messageEdit; //ввод нового сообщения
+    QPushButton *sendButton; //кнопка «Отправить»
 
-    QLabel      *userLabel;
+    //Сеть и протокол
+    QSslSocket *socket; //шифрованный TCP-сокет (SSL)
+    int myUserId = -1; //идентификатор текущего пользователя
+    QString myUsername; //его имя
+    int currentChatId = -1; //выбранный chat_id
 
-    // Для контекстного меню удаления
-    // (id сообщений у нас выводится (id=...))
-    // и для названий чатов:
-    QHash<int,QString> cidMap;
+    //Флаги по многошаговым операциям
+    bool expectingUserId = false; //ждем ID пользователя (для CREATE_CHAT)
+    bool creatingGroup = false; //в процессе сборки группового чата
+    QString pendingPeerName; //временно: имя собеседника
+    QString pendingGroupName; // временно: имя создаваемой группы
+    QStringList pendingGroupNames; //имена участников группы
+    QVector<int> pendingGroupIds; //уже готовые ID пользователей, добавляемых в группу
 
-    QString     pendingGroupName;
-    QStringList pendingGroupNames;    // исходные юзернеймы
-    QVector<int> pendingGroupIds;     // resolved user IDs
+    //Запись чата: либо пользовательское сообщение, либо событие 
+    struct ChatEntry {
+        enum Type { Message, Event } type;
+        QString date; //временная метка
+        QString author;//для Message — имя пользователя, для Event — пустая строка
+        QString text; //текст сообщения или описание события
+        int id = -1; //message_id, для Event не используется
+    };
 
-    QMap<int,int> blockToMsgId;  
-    QHash<int, QVector<ChatEntry>> cache; // chat_id → история
+    //Локальный кэш истории: для каждого chat_id — вектор ChatEntry
+    QHash<int, QVector<ChatEntry>> cache;
+    //Чаты, которые ожидают подгрузку новых сообщений
+    QSet<int> waitingChatsForUpdating; 
 
-    ChatEntry lastMessage;
+    //Вспомогательные методы
+    void sendCmd(const QString &cmd); //отправляет команду серверу по сокету
+    void appendHtmlLine(const QString &html); //вставляет HTML в chatView
 
-    void sendCmd(const QString &cmd);
-    void appendHtmlLine(const QString &html);
+    //Контекстные меню
+    //Для удаления конкретного сообщения по позиции в chatView
+    QMap<int,int> blockToMsgId;  //blockNumber -> msg_id
+    // Для сохранения имён групп/чатов
+    QHash<int,QString> cidMap; // chat_id -> отображаемое имя чата
 };
