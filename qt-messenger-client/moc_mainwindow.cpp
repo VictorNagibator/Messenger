@@ -27,7 +27,7 @@ QT_WARNING_PUSH
 QT_WARNING_DISABLE_DEPRECATED
 namespace {
 struct qt_meta_stringdata_MainWindow_t {
-    uint offsetsAndSizes[22];
+    uint offsetsAndSizes[24];
     char stringdata0[11];
     char stringdata1[11];
     char stringdata2[1];
@@ -38,7 +38,8 @@ struct qt_meta_stringdata_MainWindow_t {
     char stringdata7[18];
     char stringdata8[22];
     char stringdata9[3];
-    char stringdata10[20];
+    char stringdata10[23];
+    char stringdata11[20];
 };
 #define QT_MOC_LITERAL(ofs, len) \
     uint(sizeof(qt_meta_stringdata_MainWindow_t::offsetsAndSizes) + ofs), len 
@@ -54,7 +55,8 @@ Q_CONSTINIT static const qt_meta_stringdata_MainWindow_t qt_meta_stringdata_Main
         QT_MOC_LITERAL(62, 17),  // "onSocketReadyRead"
         QT_MOC_LITERAL(80, 21),  // "onChatViewContextMenu"
         QT_MOC_LITERAL(102, 2),  // "pt"
-        QT_MOC_LITERAL(105, 19)   // "redrawChatFromCache"
+        QT_MOC_LITERAL(105, 22),  // "onChatsListContextMenu"
+        QT_MOC_LITERAL(128, 19)   // "redrawChatFromCache"
     },
     "MainWindow",
     "onRegister",
@@ -66,6 +68,7 @@ Q_CONSTINIT static const qt_meta_stringdata_MainWindow_t qt_meta_stringdata_Main
     "onSocketReadyRead",
     "onChatViewContextMenu",
     "pt",
+    "onChatsListContextMenu",
     "redrawChatFromCache"
 };
 #undef QT_MOC_LITERAL
@@ -77,7 +80,7 @@ Q_CONSTINIT static const uint qt_meta_data_MainWindow[] = {
       10,       // revision
        0,       // classname
        0,    0, // classinfo
-       8,   14, // methods
+       9,   14, // methods
        0,    0, // properties
        0,    0, // enums/sets
        0,    0, // constructors
@@ -85,14 +88,15 @@ Q_CONSTINIT static const uint qt_meta_data_MainWindow[] = {
        0,       // signalCount
 
  // slots: name, argc, parameters, tag, flags, initial metatype offsets
-       1,    0,   62,    2, 0x08,    1 /* Private */,
-       3,    0,   63,    2, 0x08,    2 /* Private */,
-       4,    0,   64,    2, 0x08,    3 /* Private */,
-       5,    0,   65,    2, 0x08,    4 /* Private */,
-       6,    0,   66,    2, 0x08,    5 /* Private */,
-       7,    0,   67,    2, 0x08,    6 /* Private */,
-       8,    1,   68,    2, 0x08,    7 /* Private */,
-      10,    0,   71,    2, 0x08,    9 /* Private */,
+       1,    0,   68,    2, 0x08,    1 /* Private */,
+       3,    0,   69,    2, 0x08,    2 /* Private */,
+       4,    0,   70,    2, 0x08,    3 /* Private */,
+       5,    0,   71,    2, 0x08,    4 /* Private */,
+       6,    0,   72,    2, 0x08,    5 /* Private */,
+       7,    0,   73,    2, 0x08,    6 /* Private */,
+       8,    1,   74,    2, 0x08,    7 /* Private */,
+      10,    1,   77,    2, 0x08,    9 /* Private */,
+      11,    0,   80,    2, 0x08,   11 /* Private */,
 
  // slots: parameters
     QMetaType::Void,
@@ -101,6 +105,7 @@ Q_CONSTINIT static const uint qt_meta_data_MainWindow[] = {
     QMetaType::Void,
     QMetaType::Void,
     QMetaType::Void,
+    QMetaType::Void, QMetaType::QPoint,    9,
     QMetaType::Void, QMetaType::QPoint,    9,
     QMetaType::Void,
 
@@ -131,6 +136,9 @@ Q_CONSTINIT const QMetaObject MainWindow::staticMetaObject = { {
         // method 'onChatViewContextMenu'
         QtPrivate::TypeAndForceComplete<void, std::false_type>,
         QtPrivate::TypeAndForceComplete<const QPoint &, std::false_type>,
+        // method 'onChatsListContextMenu'
+        QtPrivate::TypeAndForceComplete<void, std::false_type>,
+        QtPrivate::TypeAndForceComplete<const QPoint &, std::false_type>,
         // method 'redrawChatFromCache'
         QtPrivate::TypeAndForceComplete<void, std::false_type>
     >,
@@ -150,7 +158,8 @@ void MainWindow::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _id, 
         case 4: _t->onSend(); break;
         case 5: _t->onSocketReadyRead(); break;
         case 6: _t->onChatViewContextMenu((*reinterpret_cast< std::add_pointer_t<QPoint>>(_a[1]))); break;
-        case 7: _t->redrawChatFromCache(); break;
+        case 7: _t->onChatsListContextMenu((*reinterpret_cast< std::add_pointer_t<QPoint>>(_a[1]))); break;
+        case 8: _t->redrawChatFromCache(); break;
         default: ;
         }
     }
@@ -175,13 +184,13 @@ int MainWindow::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
     if (_id < 0)
         return _id;
     if (_c == QMetaObject::InvokeMetaMethod) {
-        if (_id < 8)
+        if (_id < 9)
             qt_static_metacall(this, _c, _id, _a);
-        _id -= 8;
+        _id -= 9;
     } else if (_c == QMetaObject::RegisterMethodArgumentMetaType) {
-        if (_id < 8)
+        if (_id < 9)
             *reinterpret_cast<QMetaType *>(_a[0]) = QMetaType();
-        _id -= 8;
+        _id -= 9;
     }
     return _id;
 }

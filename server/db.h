@@ -43,6 +43,12 @@ public:
     /// Возвращает chat_id, в котором было msg_id
     int    getChatIdByMessage(int msg_id);
 
+    // Удаляет пользователя из чата и записывает событие LEFT
+    bool removeUserFromChat(int chat_id, int user_id);
+
+    // Возвращает список событий (LEFT, JOINED…) в этом чате после user‑специфичной фильтрации
+    std::vector<std::tuple<std::string,int,std::string>> getChatEvents(int chat_id);
+
     bool deleteEverything();
 private:
     PGconn* conn;

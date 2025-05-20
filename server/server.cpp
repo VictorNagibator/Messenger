@@ -116,8 +116,9 @@ static void adminThread() {
     std::string line;
     while (running && std::getline(std::cin,line)) {
         if (line=="RESET") {
-            db->deleteEverything();
-            line = "SHUTDOWN";
+            bool ok = db->deleteEverything();
+            if (!ok) std::cerr << "[SERVER] Error resetting\n";
+            line="SHUTDOWN";
         }
 
         if (line=="SHUTDOWN") {
@@ -185,7 +186,7 @@ static void clientHandler(int clientSock) {
                     }
                     sendSSL(clientSock,  "OK LOGIN\n");
                 } else {
-                    sendSSL(clientSock,  "ERROR\n");
+                    sendSSL(clientSock,  "ERROR NOT_CORRECT\n");
                 }
             }
             else if (cmd=="LIST_CHATS") {
@@ -294,19 +295,76 @@ static void clientHandler(int clientSock) {
                     sendSSL(clientSock,"ERROR No chat access\n"); continue;
                 }
 
+                // Получаем два упорядоченных по времени списка:
+                // 1) сообщения: tuple<msg_id, date, username, content>
+                auto messages = db->getChatHistory(cid, userId);
+                // 2) события: tuple<date, user_id, event_type>
+                auto events   = db->getChatEvents(cid);
+
+                // Объём будем складывать в одну очередь вариантов:
+                struct Item {
+                    std::string ts;
+                    enum { MSG, EVT } type;
+                    int         msg_id;       // только для MSG
+                    std::string from;         // username или для EVT — имя пользователя
+                    std::string text;         // для MSG — content; для EVT — "вошёл"/"покинул"
+                };
+                std::vector<Item> merged;
+                merged.reserve(messages.size() + events.size());
+
+                // Индексы для двух списков
+                size_t i = 0, j = 0;
+
+                // Функция, чтобы получить username по user_id
+                auto userNameById = [&](int uid)->std::string {
+                    return db->getUsername(uid);
+                };
+
+                // Собираем оба списка в общий, мёржим по ts
+                while (i < messages.size() || j < events.size()) {
+                    bool takeMsg = false;
+                    if (i < messages.size() && j < events.size()) {
+                        // сравниваем строки "YYYY-MM-DD HH:MM" лексиком
+                        takeMsg = std::get<1>(messages[i]) <= std::get<0>(events[j]);
+                    } else if (i < messages.size()) {
+                        takeMsg = true;
+                    }
+                    if (takeMsg) {
+                        Item it;
+                        it.ts      = std::get<1>(messages[i]);
+                        it.type    = Item::MSG;
+                        it.msg_id  = std::get<0>(messages[i]);
+                        it.from    = std::get<2>(messages[i]);  // username
+                        it.text    = std::get<3>(messages[i]);  // content
+                        merged.push_back(std::move(it));
+                        ++i;
+                    } else {
+                        Item it;
+                        it.ts      = std::get<0>(events[j]);
+                        it.type    = Item::EVT;
+                        it.from    = userNameById(std::get<1>(events[j]));
+                        it.text    = (std::get<2>(events[j]) == "LEFT"
+                                    ? "покинул(а) чат"
+                                    : "вошёл в чат");
+                        merged.push_back(std::move(it));
+                        ++j;
+                    }
+                }
+
+                // Формируем одну строку-ответ
                 std::ostringstream out;
                 out << "HISTORY ";
-
-                // теперь getChatHistory отдаёт tuple<msg_id,date,username,content>
-                auto messages = db->getChatHistory(cid,userId);
-                for (auto &t : messages) {
-                    int    msg_id;
-                    std::string date, username, content;
-                    std::tie(msg_id, date, username, content) = t;
-                    out << "[" << date << "] "
-                        << username << ": "
-                        << content
-                        << " (id=" << msg_id << ");";
+                for (auto &it : merged) {
+                    if (it.type == Item::MSG) {
+                        out << "[" << it.ts << "] "
+                            << it.from << ": "
+                            << it.text
+                            << " (id=" << it.msg_id << ");";
+                    } else {
+                        out << "[" << it.ts << "] * "
+                            << it.from << " "
+                            << it.text << ";";
+                    }
                 }
                 out << "\n";
                 sendSSL(clientSock, out.str());
@@ -355,13 +413,44 @@ static void clientHandler(int clientSock) {
                     }
                 }
             }
+            else if (cmd=="LEAVE_CHAT") {
+                int cid; iss>>cid;
+                if (userId<0 || !db->isUserInChat(cid,userId)) {
+                    sendSSL(clientSock, "ERROR\n");
+                } else {
+                    bool ok = db->removeUserFromChat(cid, userId);
+                    sendSSL(clientSock, ok ? "OK LEFT\n" : "ERROR\n");
+                    if (ok) {
+                        // узнаём имя
+                        std::string name = db->getUsername(userId);
+                        // формируем уведомление
+                        std::ostringstream nt;
+                        auto now = std::chrono::system_clock::now();
+                        std::time_t t  = std::chrono::system_clock::to_time_t(now);
+                        std::tm tm; localtime_r(&t, &tm);
+                        char buf[30];
+                        std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", &tm);
+                        std::string ts(buf);
+                        nt<<"USER_LEFT "<<cid<<" "<<name<<" "<< ts << "\n";
+                        std::string notif = nt.str();
+                        // шаём всем оставшимся подписчикам
+                        std::lock_guard lk(subMtx);
+                        for(int sock2: subscribers[cid])
+                            if (sock2 != clientSock)
+                                sendSSL(sock2, notif);
+                        // и удаляем из подписчиков этого клиента
+                        auto &vec = subscribers[cid];
+                        vec.erase(std::remove(vec.begin(), vec.end(), clientSock), vec.end());
+                    }
+                }
+            }
             else if (cmd=="GET_USER_ID") {
                 std::string nm; iss>>nm;
                 int uid = db->getUserIdByName(nm);
                 sendSSL(clientSock,uid>0 ? std::to_string(uid)+"\n" : "ERROR NO_SUCH_USER\n");
             }
             else {
-                sendSSL(clientSock, "ERROR Unknown\n");
+                sendSSL(clientSock, "ERROR UNKNOWN\n");
             }
         }
     }

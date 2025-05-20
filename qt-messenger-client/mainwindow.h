@@ -12,11 +12,13 @@
 #include <QHash>
 #include <QLabel>
 
-struct Message {
-    int     id;
-    QString date;
-    QString author;
-    QString text;
+// Тип записи в чате — либо сообщение, либо системное событие
+struct ChatEntry {
+    enum Type { Message, Event } type;
+    QString date;      // "[2025-05-20 16:30]"
+    QString author;    // для Message — имя, для Event — пусто
+    QString text;      // содержимое или текст события
+    int     id = -1;   // для Message — msg_id, для Event не используется
 };
 
 class MainWindow : public QMainWindow {
@@ -34,8 +36,8 @@ private slots:
     void onSend();
     void onSocketReadyRead();
     void onChatViewContextMenu(const QPoint &pt);
+    void onChatsListContextMenu(const QPoint &pt);
     void redrawChatFromCache();
-
 
 private:
     // UI
@@ -77,9 +79,10 @@ private:
     QVector<int> pendingGroupIds;     // resolved user IDs
 
     QMap<int,int> blockToMsgId;  
-    QHash<int, QVector<Message>> cache;
+    QHash<int, QVector<ChatEntry>> cache; // chat_id → история
 
-    Message lastMessage;
+    ChatEntry lastMessage;
 
     void sendCmd(const QString &cmd);
+    void appendHtmlLine(const QString &html);
 };

@@ -153,6 +153,7 @@ MainWindow::MainWindow(QWidget *parent)
             pendingGroupName = QInputDialog::getText(
                 this, "Новая группа", "Название группы:", QLineEdit::Normal, {}, &ok);
             if (!ok || pendingGroupName.isEmpty()) return;
+            pendingGroupName.replace(" ", "");
             QString members = QInputDialog::getText(
                 this, "Новая группа", "Введите имена пользователей (через пробел):",
                 QLineEdit::Normal, {}, &ok);
@@ -166,6 +167,9 @@ MainWindow::MainWindow(QWidget *parent)
 
         auto *h = new QHBoxLayout();
         chatsList = new QListWidget(pageChats);
+        chatsList->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(chatsList, &QListWidget::customContextMenuRequested,
+                this, &MainWindow::onChatsListContextMenu);
         h->addWidget(chatsList, 1);
 
         auto *r = new QVBoxLayout();
@@ -206,13 +210,57 @@ void MainWindow::sendCmd(const QString &cmd) {
     socket->write(cmd.toUtf8() + "\n");
 }
 
+void MainWindow::appendHtmlLine(const QString &html) {
+    auto cursor = chatView->textCursor();
+    cursor.movePosition(QTextCursor::End);
+    cursor.insertHtml(html);
+    cursor.insertBlock();  // переходим на следующую строку
+    chatView->setTextCursor(cursor);
+}
+
 void MainWindow::redrawChatFromCache() {
     chatView->clear();
-    for (const Message &m : cache[currentChatId]) {
-        chatView->append(
-          QString("[%1] %2: %3")
-            .arg(m.date, m.author, m.text)
-        );
+    for (const ChatEntry &e : cache[currentChatId]) {
+        if (e.type == ChatEntry::Message) {
+            appendHtmlLine(
+                QString("<span style='font-size:small;color:#666;'>[%1]</span> "
+                        "<b>%2:</b> %3")
+                    .arg(e.date,
+                         e.author.toHtmlEscaped(),
+                         e.text.toHtmlEscaped())
+            );
+        } else {
+            appendHtmlLine(
+                QString("<span style='font-size:small;color:#666;'>[%1]</span> "
+                        "<i style='color:rgba(0,0,0,0.6);'>%2</i>")
+                    .arg(e.date, e.text.toHtmlEscaped())
+            );
+        }
+    }
+}
+
+void MainWindow::onChatsListContextMenu(const QPoint &pt) {
+    auto *item = chatsList->itemAt(pt);
+    if (!item) return;
+
+    bool isGroup = item->data(Qt::UserRole+3).toBool(); // нужно сохранить признак is_group
+    QMenu menu;
+    QAction *leaveAct = nullptr;
+    if (isGroup) {
+        leaveAct = menu.addAction("Покинуть группу");
+    }
+    QAction *act = menu.exec(chatsList->mapToGlobal(pt));
+    if (act == leaveAct && isGroup) {
+        if (QMessageBox::question(this, "Покинуть группу",
+              "Вы действительно хотите покинуть эту группу?",
+              QMessageBox::Yes|QMessageBox::No) == QMessageBox::Yes)
+        {
+            int cid = item->data(Qt::UserRole).toInt();
+            sendCmd(QString("LEAVE_CHAT %1").arg(cid));
+            chatView->clear();
+            // локально удаляем из списка:
+            delete item;
+        }
     }
 }
 
@@ -229,10 +277,20 @@ void MainWindow::onChatViewContextMenu(const QPoint &pt) {
     QAction *act = menu.exec(QCursor::pos());
     if (!act) return;
     int msgId = cache[currentChatId][blockNo].id;
+
     if (act == delMe) {
-        sendCmd(QString("DELETE %1").arg(msgId));
+        auto ok = QMessageBox::question(this, "Удалить сообщение",
+            "Вы уверены, что хотите удалить это сообщение у себя?",
+            QMessageBox::Yes|QMessageBox::No);
+        if (ok == QMessageBox::Yes)
+            sendCmd(QString("DELETE %1").arg(msgId));
+
     } else if (act == delAll) {
-        sendCmd(QString("DELETE_GLOBAL %1").arg(msgId));
+        auto ok = QMessageBox::question(this, "Удалить сообщение у всех",
+            "Вы уверены, что хотите удалить это сообщение у всех участников?",
+            QMessageBox::Yes|QMessageBox::No);
+        if (ok == QMessageBox::Yes)
+            sendCmd(QString("DELETE_GLOBAL %1").arg(msgId));
     }
 }
 
@@ -274,40 +332,52 @@ void MainWindow::onChatSelected() {
     auto *it = chatsList->currentItem();
     if (!it) return;
     currentChatId = it->data(Qt::UserRole).toInt();
-    chatView->clear();
 
     // Если есть кэш — рисуем из него
     if (cache.contains(currentChatId)) {
-        const QVector<Message> &msgs = cache[currentChatId];
-        for (const Message &m : msgs) {
-            // Формируем строку без «(id=...)»
-            chatView->append(
-                QString("[%1] %2: %3")
-                    .arg(m.date, m.author, m.text)
-            );
-        }
-        return;
+        redrawChatFromCache();
     }
 
     // Иначе — запрашиваем у сервера
     sendCmd(QString("HISTORY %1").arg(currentChatId));
 }
 
-// Слот: отправить сообщение
 void MainWindow::onSend() {
     if (currentChatId < 0) return;
     QString msg = messageEdit->text().trimmed();
     if (msg.isEmpty()) return;
+
+    // 1) формируем текущую временную метку
+    QString now = QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm");
+
+    // 2) Подготавляем ChatEntry (ид ещё неизвестно, запишем -1)
+    ChatEntry e;
+    e.type   = ChatEntry::Message;
+    e.date   = now;
+    e.author = myUsername;
+    e.text   = msg;
+    e.id     = -1;
+
+    // 3) кладём в кэш
+    cache[currentChatId].append(e);
+
+    // 4) сразу выводим в chatView тем же HTML‑шаблоном
+    appendHtmlLine(
+        QString("<span style='font-size:small;color:#666;'>[%1]</span> "
+                "<b>%2:</b> %3")
+            .arg(e.date,
+                 e.author.toHtmlEscaped(),
+                 e.text.toHtmlEscaped())
+    );
+
+    // 5) отправляем на сервер
     sendCmd(QString("SEND %1 ").arg(currentChatId) + msg);
 
-    //show message
-    QString now = QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm");
-    chatView->append(QString("[%1] %2: %3").arg(now, myUsername, msg));
+    // 6) чистим поле ввода
     messageEdit->clear();
 
-    lastMessage.date = now;
-    lastMessage.author = myUsername;
-    lastMessage.text = msg;
+    // 7) сохраняем в lastMessage на случай OK_SENT
+    lastMessage = e;
 }
 
 // Слот: пришли данные от сервера
@@ -375,14 +445,19 @@ void MainWindow::onSocketReadyRead() {
         if (line.startsWith("OK SENT")) {
             bool ok;
             int mid = line.mid(QString("OK SENT ").length()).toInt(&ok);
-            if (ok) {
-                lastMessage.id = mid;
-                cache[currentChatId].append(lastMessage);
-                redrawChatFromCache();
+            if (!ok) return;
+
+            // Проставляем настоящий id — ищем последний записанный элемент с id=-1
+            auto &vec = cache[currentChatId];
+            for (int i = vec.size()-1; i >= 0; --i) {
+                if (vec[i].id == -1 && vec[i].author == myUsername) {
+                    vec[i].id = mid;
+                    break;
+                }
             }
+            // у нас уже всё отображено, поэтому перерисовывать не нужно
             continue;
         }
-
 
         // 4) Новый чат
         if (line.startsWith("NEW_CHAT")) {
@@ -427,6 +502,7 @@ void MainWindow::onSocketReadyRead() {
                 it->setData(Qt::UserRole, cid);
                 it->setData(Qt::UserRole+1, name);
                 it->setData(Qt::UserRole+2, members);
+                it->setData(Qt::UserRole+3, isg);
                 chatsList->addItem(it);
             }
             if (!chunks.isEmpty()) onChatSelected();
@@ -434,28 +510,71 @@ void MainWindow::onSocketReadyRead() {
         }
 
         // 7) История
-        // в onSocketReadyRead(), при обработке HISTORY
         if (line.startsWith("HISTORY ")) {
             chatView->clear();
-            QVector<Message> msgs;
+            QVector<ChatEntry> entries;
             auto chunks = line.mid(8).split(";", Qt::SkipEmptyParts);
+
+            QRegularExpression reMsg(R"(\[([^\]]+)\]\s+([^:]+):\s+(.+)\s+\(id=(\d+)\))");
+            QRegularExpression reEvt(R"(\[([^\]]+)\]\s+\*\s+(.+))");
+
             for (const QString &chunk : chunks) {
-                QRegularExpression re(R"(\[([^\]]+)\]\s+([^:]+):\s+(.+)\s+\(id=(\d+)\))");
-                auto m = re.match(chunk);
-                if (!m.hasMatch()) continue;
-                Message msg;
-                msg.date   = m.captured(1);
-                msg.author = m.captured(2);
-                msg.text   = m.captured(3);
-                msg.id     = m.captured(4).toInt();
-                msgs.append(msg);
-                chatView->append(
-                    QString("[%1] %2: %3")
-                        .arg(msg.date, msg.author, msg.text)
+                if (auto m = reMsg.match(chunk); m.hasMatch()) {
+                    ChatEntry e;
+                    e.type   = ChatEntry::Message;
+                    e.date   = m.captured(1);
+                    e.author = m.captured(2);
+                    e.text   = m.captured(3);
+                    e.id     = m.captured(4).toInt();
+                    entries.append(e);
+
+                    appendHtmlLine(
+                        QString("<span style='font-size:small;color:#666;'>[%1]</span> "
+                                "<b>%2:</b> %3")
+                            .arg(e.date,
+                                e.author.toHtmlEscaped(),
+                                e.text.toHtmlEscaped())
+                    );
+                }
+                else if (auto m = reEvt.match(chunk); m.hasMatch()) {
+                    ChatEntry e;
+                    e.type = ChatEntry::Event;
+                    e.date = m.captured(1);
+                    e.text = m.captured(2);
+                    entries.append(e);
+
+                    appendHtmlLine(
+                        QString("<span style='font-size:small;color:#666;'>[%1]</span> "
+                                "<i style='color:rgba(0,0,0,0.6);'>*** %2 ***</i>")
+                            .arg(e.date, e.text.toHtmlEscaped())
+                    );
+                }
+            }
+
+            cache[currentChatId] = std::move(entries);
+            continue;
+        }
+
+        if (line.startsWith("USER_LEFT")) {
+            // USER_LEFT <chat_id> <username> <HH:MM>
+            auto parts = line.split(' ');
+            int cid     = parts[1].toInt();
+            QString who = parts[2];
+            QString ts  = parts[3] + " " + parts[4];
+
+            ChatEntry e;
+            e.type = ChatEntry::Event;
+            e.date = ts;
+            e.text = QString("%1 покинул(а) чат").arg(who);
+
+            cache[cid].append(e);
+            if (cid == currentChatId) {
+                appendHtmlLine(
+                    QString("<span style='font-size:small;color:#666;'>[%1]</span> "
+                            "<i style='color:rgba(0,0,0,0.6);'>*** %2 ***</i>")
+                        .arg(e.date, e.text.toHtmlEscaped())
                 );
             }
-            // вот тут сохраняем в кэш
-            cache[currentChatId] = msgs;
             continue;
         }
 
@@ -470,16 +589,17 @@ void MainWindow::onSocketReadyRead() {
                 if (vec[i].id == mid) { vec.remove(i); break; }
             }
             // 2) перерисовываем окно
-            chatView->clear();
-            for (const Message &m : vec) {
-                chatView->append(QString("[%1] %2: %3")
-                                .arg(m.date, m.author, m.text));
-            }
+            redrawChatFromCache();
             continue;
         }
 
         if (line.startsWith("ERROR USER_EXISTS")) {
             QMessageBox::warning(this,"Ошибка", "Такой пользователь уже существует!");
+            continue;
+        }
+
+        if (line.startsWith("ERROR NOT_CORRECT")) {
+            QMessageBox::warning(this,"Ошибка", "Неверное имя пользователя или пароль!");
             continue;
         }
 

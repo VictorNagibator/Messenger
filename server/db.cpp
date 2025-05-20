@@ -297,6 +297,9 @@ bool Database::deleteEverything() {
     r=PQexecParams(conn,
       "DELETE FROM user_deleted_messages",
       0,nullptr,v,nullptr,nullptr,0);
+    r=PQexecParams(conn,
+      "DELETE FROM chat_events",
+      0,nullptr,v,nullptr,nullptr,0);
     bool ok = (PQresultStatus(r) == PGRES_COMMAND_OK);
     PQclear(r);
     return ok;
@@ -336,4 +339,62 @@ int Database::getChatIdByMessage(int msg_id) {
         cid = std::stoi(PQgetvalue(r,0,0));
     PQclear(r);
     return cid;
+}
+
+bool Database::removeUserFromChat(int chat_id, int user_id) {
+    std::lock_guard<std::mutex> lk(dbMtx);
+    // 1) удалить из chat_members
+    {
+      std::ostringstream c, u;
+      c<<chat_id; u<<user_id;
+      const char* vals1[2]={c.str().c_str(), u.str().c_str()};
+      PGresult* r = PQexecParams(conn,
+         "DELETE FROM chat_members WHERE chat_id=$1 AND user_id=$2",
+         2,nullptr,vals1,nullptr,nullptr,0);
+      PQclear(r);
+    }
+    // 2) вставить в chat_events
+    {
+      std::ostringstream c, u;
+      c<<chat_id; u<<user_id;
+      const char* vals2[3]={c.str().c_str(), u.str().c_str(), "LEFT"};
+      PGresult* r = PQexecParams(conn,
+        "INSERT INTO chat_events(chat_id,user_id,event_type,event_ts) "
+        "VALUES($1,$2,$3,now())",
+        3,nullptr,vals2,nullptr,nullptr,0);
+      bool ok = (PQresultStatus(r)==PGRES_COMMAND_OK);
+      PQclear(r);
+      return ok;
+    }
+}
+
+// Возвращает список событий (вход/выход) с полной датой+временем
+std::vector<std::tuple<std::string,int,std::string>>
+Database::getChatEvents(int chat_id) {
+    std::lock_guard<std::mutex> lk(dbMtx);
+    const std::string c = std::to_string(chat_id);
+    const char* vals[1] = { c.c_str() };
+    PGresult* r = PQexecParams(conn,
+      R"(
+        SELECT
+          to_char(event_ts,'YYYY-MM-DD HH24:MI'),
+          user_id,
+          event_type
+        FROM chat_events
+        WHERE chat_id=$1
+        ORDER BY event_ts
+      )",
+      1, nullptr, vals, nullptr, nullptr, 0);
+
+    std::vector<std::tuple<std::string,int,std::string>> out;
+    int rows = PQntuples(r);
+    out.reserve(rows);
+    for (int i = 0; i < rows; ++i) {
+        std::string ts    = PQgetvalue(r,i,0);
+        int         uid   = std::stoi(PQgetvalue(r,i,1));
+        std::string typ   = PQgetvalue(r,i,2);
+        out.emplace_back(ts, uid, typ);
+    }
+    PQclear(r);
+    return out;
 }
