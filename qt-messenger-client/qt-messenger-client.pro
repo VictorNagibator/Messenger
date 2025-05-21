@@ -5,8 +5,6 @@ CONFIG   += c++17
 SOURCES  += main.cpp \
             mainwindow.cpp
 
-RESOURCES += resources.qrc
-
 HEADERS  += mainwindow.h
 
 # Для OpenSSL
