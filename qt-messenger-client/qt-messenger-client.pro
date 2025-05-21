@@ -2,10 +2,10 @@ QT       += core gui widgets network
 
 CONFIG   += c++17
 
-SOURCES  += main.cpp \
-            mainwindow.cpp
+SOURCES  += src/main.cpp \
+            src/mainwindow.cpp
 
-HEADERS  += mainwindow.h
+HEADERS  += src/mainwindow.h
 
 # Для OpenSSL
 LIBS    += -lssl -lcrypto

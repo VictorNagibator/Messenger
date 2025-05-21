@@ -4,8 +4,8 @@ LIBS      = -lpq -lssl -lcrypto
 
 all: server
 
-server: server.cpp db.cpp
-	$(CXX) $(CXXFLAGS) -o server server.cpp db.cpp $(LIBS)
+server: src/server.cpp src/db.cpp
+	$(CXX) $(CXXFLAGS) -o server src/server.cpp src/db.cpp $(LIBS)
 
 clean:
 	rm -f server
