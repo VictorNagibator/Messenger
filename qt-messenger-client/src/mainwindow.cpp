@@ -234,6 +234,8 @@ MainWindow::MainWindow(QWidget *parent)
         connect(chatsList, &QListWidget::itemClicked, this, &MainWindow::onChatSelected);
         //Нажатие «Отправить» - onSend()
         connect(sendButton, &QPushButton::clicked, this, &MainWindow::onSend);
+        //И по нажатию Enter в поле ввода тоже
+        connect(messageEdit, &QLineEdit::returnPressed, this, &MainWindow::onSend);
     }
     stack->addWidget(pageChats);
 
@@ -376,6 +378,11 @@ void MainWindow::onRegister() {
         return;
     }
 
+    if (u.contains(" ")) {
+        QMessageBox::warning(this, "Ошибка", "Имя пользователя не должно содержать пробелы");
+        return;
+    }
+
     //Формируем команду и отправляем на сервер
     sendCmd(QString("REGISTER %1 %2").arg(u, p));
 }
@@ -389,6 +396,12 @@ void MainWindow::onLogin() {
         QMessageBox::warning(this, "Ошибка", "Введите имя пользователя и пароль");
         return;
     }
+
+    if (u.contains(" ")) {
+        QMessageBox::warning(this, "Ошибка", "Имя пользователя не должно содержать пробелы");
+        return;
+    }
+
     //Сохраняем локально имя для отображения
     myUsername = u;
     //Отправляем команду входа
@@ -592,6 +605,7 @@ void MainWindow::onSocketReadyRead() {
             int cid = parts[1].toInt();
             bool isGroup = (parts[2] == "1");
             QString nameOrList = parts[3];
+            nameOrList.replace("_", " ");
             QString display;
             if (isGroup) {
                 display = QString("👥: %1").arg(nameOrList);
@@ -654,6 +668,7 @@ void MainWindow::onSocketReadyRead() {
                 int cid = p[0].toInt();
                 bool isGroup = (p[1] == "1");
                 QString name = p[2];
+                name.replace("_", " ");
                 auto members = p[3].split(',');
 
                 //Для личного чата показываем имя «с кем», для группы — саму группу
