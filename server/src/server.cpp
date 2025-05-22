@@ -557,8 +557,9 @@ static void clientHandler(int clientSock) {
                 int sender = db->getMessageSender(msg_id);
                 if (sender == userId) {
                     bool ok = db->deleteMessageForUser(msg_id, userId);
+                    int chat_id = db->getChatIdByMessage(msg_id);
                     std::ostringstream notif;
-                    notif << "MSG_DELETED " << msg_id << "\n";
+                    notif << "MSG_DELETED " << chat_id << " " << msg_id << "\n";
                     sendSSL(clientSock, ok ? notif.str() : "ERROR\n");
                 } else {
                     sendSSL(clientSock, "ERROR NO_RIGHTS\n");
@@ -576,7 +577,6 @@ static void clientHandler(int clientSock) {
                 }
 
                 //Помечаем сообщение как удалённое во всех сессиях
-                int cid = db->getChatIdByMessage(msg_id);
                 bool ok = db->deleteMessageGlobal(msg_id);
                 if (!ok) {
                     sendSSL(clientSock, "ERROR\n");
@@ -586,7 +586,7 @@ static void clientHandler(int clientSock) {
                 //Уведомляем всех подписчиков чата
                 int chat_id = db->getChatIdByMessage(msg_id);
                 std::ostringstream notif;
-                notif << "MSG_DELETED " << cid << " " << msg_id << "\n";
+                notif << "MSG_DELETED " << chat_id << " " << msg_id << "\n";
 
                 //Лочим доступ, так как работаем с общей структурой
                 std::lock_guard<std::mutex> lk(subMtx);

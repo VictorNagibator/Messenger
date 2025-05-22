@@ -761,7 +761,7 @@ void MainWindow::onSocketReadyRead() {
             continue;
         }
 
-        //11) Глобальное удаление сообщения — "MSG_DELETED <msg_id>"
+        //11) Глобальное удаление сообщения — "MSG_DELETED <chat_id> <msg_id>"
         if (line.startsWith("MSG_DELETED")) {
             auto parts = line.split(' ');
             int cid = parts[1].toInt();
