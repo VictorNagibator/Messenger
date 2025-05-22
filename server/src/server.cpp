@@ -318,11 +318,38 @@ static void clientHandler(int clientSock) {
                     db->addUserToChat(chatId, peer);
 
                     //3) Уведомляем обоих участников о новом чате (NEW_CHAT)
-                    std::string push = "NEW_CHAT\n";
+                    auto userName = db->getUsername(userId);
+                    auto peerName = db->getUsername(peer);
+
+                    std::ostringstream out;
+                    out << "NEW_CHAT "
+                        << chatId << " "                       //id чата
+                        << "0 ";    //флаг групповой
+
+                    //для личного чата можно отдать имена участников через запятую
+                    out << userName << "," << peerName;
+                    out << "\n";
+
+                    std::string push = out.str();
+
                     std::lock_guard<std::mutex> ul(userMtx);
                     for (int u : {userId, peer}) {
                         for (int s2 : userToSockets[u]) {
                             sendSSL(s2, push);
+                        }
+                    }
+
+                    //Подписываем все сокеты участников на этот чат,
+                    //чтобы им потом приходили NEW_MESSAGE
+                    {
+                        std::lock_guard<std::mutex> sl(subMtx);
+                        auto &subs = subscribers[chatId];
+                        for (int u : {userId, peer}) {
+                            for (int sock2 : userToSockets[u]) {
+                                //избегаем дублирования
+                                if (std::find(subs.begin(), subs.end(), sock2) == subs.end())
+                                    subs.push_back(sock2);
+                            }
                         }
                     }
 
@@ -353,11 +380,31 @@ static void clientHandler(int clientSock) {
                     }
 
                     //4) Уведомляем всех участников о новом групповом чате
-                    std::string push = "NEW_CHAT\n";
-                    std::lock_guard<std::mutex> ul(userMtx);
+                    std::ostringstream out;
+                    out << "NEW_CHAT "
+                        << cid << " "                       //id чата
+                        << "1 " << gname;   //флаг групповой и имя группы
+                    out << "\n";
+
+                    std::string push = out.str();
+                    std::lock_guard ul(userMtx);
                     for (int u : members) {
-                        for (int sock2 : userToSockets[u]) {
-                            sendSSL(sock2, push);
+                        for (int s2 : userToSockets[u]) {
+                            sendSSL(s2, push);
+                        }
+                    }
+
+                    //Подписываем все сокеты участников на этот чат,
+                    //чтобы им потом приходили NEW_MESSAGE
+                    {
+                        std::lock_guard<std::mutex> sl(subMtx);
+                        auto &subs = subscribers[cid];
+                        for (int u : members) {
+                            for (int sock2 : userToSockets[u]) {
+                                //избегаем дублирования
+                                if (std::find(subs.begin(), subs.end(), sock2) == subs.end())
+                                    subs.push_back(sock2);
+                            }
                         }
                     }
                 }
@@ -389,11 +436,27 @@ static void clientHandler(int clientSock) {
 
                 //Если всё успешно, рассылаем другим подписчикам команду NEW_HISTORY
                 if (id) {
-                    std::lock_guard<std::mutex> sl(subMtx);
+                    auto now = std::chrono::system_clock::now();
+                    std::time_t t = std::chrono::system_clock::to_time_t(now);
+                    std::tm tm; localtime_r(&t, &tm);
+                    char buf[20];
+                    std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", &tm);
+                    std::string timestamp(buf);
+                    std::string from = db->getUsername(userId);
+                    std::string content = msg; //без ведущего пробела
+
+                    std::ostringstream notif;
+                    notif << "NEW_MESSAGE "
+                        << cid << " "          //chat_id
+                        << id << " "           //msg_id
+                        << timestamp << " "    //timestamp
+                        << from << " "         //from
+                        << content << "\n";    //content
+
+                    std::lock_guard sl(subMtx);
                     for (int sock2 : subscribers[cid]) {
-                        if (sock2 != clientSock) {
-                            sendSSL(sock2, "NEW_HISTORY " + std::to_string(cid) + "\n");
-                        }
+                        if (sock2 != clientSock)
+                            sendSSL(sock2, notif.str());
                     }
                 }
             }
@@ -513,6 +576,7 @@ static void clientHandler(int clientSock) {
                 }
 
                 //Помечаем сообщение как удалённое во всех сессиях
+                int cid = db->getChatIdByMessage(msg_id);
                 bool ok = db->deleteMessageGlobal(msg_id);
                 if (!ok) {
                     sendSSL(clientSock, "ERROR\n");
@@ -522,7 +586,7 @@ static void clientHandler(int clientSock) {
                 //Уведомляем всех подписчиков чата
                 int chat_id = db->getChatIdByMessage(msg_id);
                 std::ostringstream notif;
-                notif << "MSG_DELETED " << msg_id << "\n";
+                notif << "MSG_DELETED " << cid << " " << msg_id << "\n";
 
                 //Лочим доступ, так как работаем с общей структурой
                 std::lock_guard<std::mutex> lk(subMtx);
@@ -573,7 +637,7 @@ static void clientHandler(int clientSock) {
                 iss >> nm;
                 int uid = db->getUserIdByName(nm);
                 sendSSL(clientSock,
-                        uid > 0 ? std::to_string(uid) + "\n"
+                        uid > 0 ? "USER_ID " + std::to_string(uid) + "\n"
                                 : "ERROR NO_SUCH_USER\n");
             }
             //Неизвестная команда

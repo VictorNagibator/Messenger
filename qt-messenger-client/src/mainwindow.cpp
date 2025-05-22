@@ -186,7 +186,7 @@ MainWindow::MainWindow(QWidget *parent)
             );
             if (!ok || pendingGroupName.isEmpty())
                 return;
-            pendingGroupName.replace(" ", "");  // удаляем пробелы из названия
+            pendingGroupName.replace(" ", "_");  //удаляем пробелы из названия
             QString members = QInputDialog::getText(
                 this, "Новая группа",
                 "Введите имена пользователей (через пробел):",
@@ -424,8 +424,8 @@ void MainWindow::onChatSelected() {
     //Получаем chat_id из данных элемента
     currentChatId = it->data(Qt::UserRole).toInt();
 
-    //Если история чата уже закэширована и этот чат НЕ в очереди на обновление — рисуем её
-    if (cache.contains(currentChatId) && !waitingChatsForUpdating.contains(currentChatId)) {
+    //Если история чата уже закэширована — рисуем её
+    if (cache.contains(currentChatId)) {
         redrawChatFromCache();
     }
     //Иначе запрашиваем историю у сервера
@@ -484,14 +484,13 @@ void MainWindow::onSocketReadyRead() {
     //Обрабатываем каждую строку отдельно
     for (const QString &line : lines) {
         //1) Ответ на GET_USER_ID — следующий ответ мы ожидаем после запроса GET_USER_ID
-        if (expectingUserId) {
+        if (line.startsWith("USER_ID")) {
             //Сбрасываем флаг ожидания ответа
             expectingUserId = false;
 
             //Пытаемся преобразовать строку в число user_id
-            bool ok;
-            int uid = line.toInt(&ok);
-            if (!ok || uid <= 0) {
+            int uid = line.split(' ')[1].toInt();
+            if (uid <= 0) {
                 //Если не удалось — показываем предупреждение
                 QMessageBox::warning(
                     this,
@@ -529,7 +528,7 @@ void MainWindow::onSocketReadyRead() {
         }
 
         //2) Обработка ошибок создания приватного чата
-        if (line == "ERROR CHAT_EXISTS") {
+        if (line.startsWith("ERROR CHAT_EXISTS")) {
             QMessageBox::warning(
                 this, 
                 "Ошибка",
@@ -588,26 +587,57 @@ void MainWindow::onSocketReadyRead() {
 
         //6) Уведомление о создании нового чата — "NEW_CHAT"
         if (line.startsWith("NEW_CHAT")) {
-            //Перезапрашиваем список чатов
-            sendCmd("LIST_CHATS");
+            //Формат: NEW_CHAT <cid> <is_group> <name_or_member1, member2>
+            QStringList parts = line.split(' ');
+            int cid = parts[1].toInt();
+            bool isGroup = (parts[2] == "1");
+            QString nameOrList = parts[3];
+            QString display;
+            if (isGroup) {
+                display = QString("👥: %1").arg(nameOrList);
+            } else {
+                //[3] == "viktor,aleksey"
+                QStringList m = nameOrList.split(',');
+                QString other = (m[0] == myUsername ? m[1] : m[0]);
+                display = QString("👤: %1").arg(other);
+            }
+            auto *item = new QListWidgetItem(display);
+            item->setData(Qt::UserRole, cid);
+            item->setData(Qt::UserRole+1, nameOrList);
+            item->setData(Qt::UserRole+3, isGroup);
+            chatsList->addItem(item);
             continue;
         }
 
-        //7) Уведомление о новой истории — "NEW_HISTORY <chat_id>"
-        if (line.startsWith("NEW_HISTORY")) {
-            //Если текущий чат совпал с тем, в котором что-то изменилось,
-            //запрашиваем его историю заново. Иначе подгрузят при клике по чату
-            auto *it = chatsList->currentItem();
-            if (!it) continue;
-            currentChatId = it->data(Qt::UserRole).toInt();
-            int changedId = line.mid(QString("NEW_HISTORY ").length()).toInt();
-            if (currentChatId == changedId) {
-                sendCmd("HISTORY " + QString::number(currentChatId));
-            }
-            else {
-                //Добавим в множество чатов, которые ожидают подгрузки
-                //Они подгрузятся при клике
-                waitingChatsForUpdating.insert(changedId);
+        //7) Уведомление о новом сообщении
+        if (line.startsWith("NEW_MESSAGE")) {
+            //Формат: NEW_MESSAGE <chat_id> <msg_id> <YYYY-MM-DD> <HH:MM> <from> <content>
+            //Разобъём по пробелам, но content может содержать пробелы, поэтому делаем так:
+            QString payload = line.mid(QString("NEW_MESSAGE ").length());
+            QStringList parts = payload.split(' ');
+            int cid  = parts[0].toInt();
+            int mid  = parts[1].toInt();
+            QString date = parts[2] + " " + parts[3];
+            QString from = parts[4];
+            //Всё остальное — content
+            QString content = parts.mid(5).join(' ');
+
+            //Добавляем в кэш
+            ChatEntry e;
+            e.type   = ChatEntry::Message;
+            e.date   = date;
+            e.author = from;
+            e.text   = content;
+            e.id     = mid;
+            cache[cid].append(e);
+
+            //Если это текущий открытый чат — выводим прямо сейчас
+            if (cid == currentChatId) {
+                appendHtmlLine(
+                    QString("<span style='font-size:small;color:#666;'>[%1]</span> "
+                            "<b>%2:</b> %3")
+                        .arg(e.date, e.author.toHtmlEscaped(), e.text.toHtmlEscaped())
+                );
             }
             continue;
         }
@@ -657,7 +687,7 @@ void MainWindow::onSocketReadyRead() {
         }
 
         //9) Обработка истории сообщений — "HISTORY <entries>;"
-        if (line.startsWith("HISTORY ")) {
+        if (line.startsWith("HISTORY")) {
             chatView->clear();
             QVector<ChatEntry> entries;
             //Отрезаем "HISTORY " и разбиваем по ';'
@@ -718,21 +748,24 @@ void MainWindow::onSocketReadyRead() {
 
         //11) Глобальное удаление сообщения — "MSG_DELETED <msg_id>"
         if (line.startsWith("MSG_DELETED")) {
-            bool ok;
-            int mid = line.mid(QString("MSG_DELETED ").length()).toInt(&ok);
-            if (!ok) continue;
+            auto parts = line.split(' ');
+            int cid = parts[1].toInt();
+            int msg_id = parts[2].toInt();
 
             //Удаляем запись из локального кэша
-            auto &vec = cache[currentChatId];
+            auto &vec = cache[cid];
             for (int i = 0; i < vec.size(); ++i) {
-                if (vec[i].id == mid) {
+                if (vec[i].id == msg_id) {
                     vec.remove(i);
                     break;
                 }
             }
 
-            //Перерисовываем окно чата
-            redrawChatFromCache();
+            if (cid == currentChatId) {
+                //Перерисовываем окно чата
+                redrawChatFromCache();
+            }
+
             continue;
         }
 

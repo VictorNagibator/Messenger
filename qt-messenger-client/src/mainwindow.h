@@ -82,8 +82,6 @@ private:
 
     //Локальный кэш истории: для каждого chat_id — вектор ChatEntry
     QHash<int, QVector<ChatEntry>> cache;
-    //Чаты, которые ожидают подгрузку новых сообщений
-    QSet<int> waitingChatsForUpdating; 
 
     //Вспомогательные методы
     void sendCmd(const QString &cmd); //отправляет команду серверу по сокету
