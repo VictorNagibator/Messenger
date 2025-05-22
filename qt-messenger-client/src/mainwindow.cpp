@@ -23,7 +23,7 @@ MainWindow::MainWindow(QWidget *parent)
     int port = 12345;
 
     //Путь до файла с настройками подключения (должен быть в одной папке с исполняемым файлом)
-    QString cfgPath = "./config.ini";
+    QString cfgPath = QCoreApplication::applicationDirPath() + "/config.ini";
 
     //Если файл конфигурации существует — читаем из него host и port
     //(Хотел изначально через QSettings, но там никак не хотело корректно брать настройки :( )
